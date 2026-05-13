@@ -8,7 +8,7 @@ Expected responsibilities:
 - Check Node.js, npm, and npx.
 - Resolve or create `$LAWCHERS_HOME`.
 - Configure provider preferences.
-- Run `lawchers doctor --json`.
+- Run `lawchers doctor`.
 - Summarize setup results for an agent.
 
 This skill is not implemented or released yet.

@@ -11,14 +11,13 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @lawchers/shared-core && npm run build --workspace @lawchers/local-store && npm run build --workspace @lawchers/embedding-provider",
+    "build": "npm run build --workspace @lawchers/cli",
     "lint": "npm run typecheck",
     "test": "vitest run",
-    "typecheck": "npm run build --workspace @lawchers/shared-core && npm run typecheck --workspace @lawchers/local-store && npm run typecheck --workspace @lawchers/embedding-provider"
+    "typecheck": "npm run typecheck --workspace @lawchers/cli"
   },
   "devDependencies": {
     "@types/node": "20.12.12",
-    "@types/proper-lockfile": "4.1.4",
     "typescript": "5.4.5",
     "vitest": "1.6.0"
   }

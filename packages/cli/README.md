@@ -1,13 +1,20 @@
 # @lawchers/cli
 
-Planning placeholder for the future aggregate `lawchers` command.
+Unified `lawchers` command shell.
 
-Expected responsibilities:
+Responsibilities:
 
-- Route `lawchers material`, `lawchers memory`, `lawchers kb`, and `lawchers workbench`.
-- Run setup and doctor checks.
-- Install released skills.
-- Reuse package APIs directly rather than shelling out to standalone commands.
-- Own the `setup-lawchers-skills` skill because setup spans all packages.
+- Route `lawchers <domain> <command>` calls through the static feature registry.
+- Own global flags, context construction, JSON stdout, stderr logging, and exit codes.
+- Run aggregate doctor checks with `lawchers doctor`.
+- Reuse skill script registries directly rather than shelling out.
 
-This package has no implementation yet.
+Implemented domain:
+
+```bash
+lawchers memory doctor
+lawchers memory learn --user <id> --user-message <text>
+lawchers memory recall --user <id> --query <text>
+```
+
+stdout is always one JSON object.

@@ -5,3 +5,7 @@ coverage/
 .cache/
 *.tsbuildinfo
 npm-debug.log*
+.local-tests/
+packages/*/tests/
+packages/*/fixtures/
+vitest.config.ts
