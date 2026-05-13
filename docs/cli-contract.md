@@ -40,7 +40,7 @@ Failed result:
 Stderr may contain JSON-lines logs:
 
 ```json
-{"timestamp":"2026-05-13T10:00:00.000Z","level":"info","traceId":"abc","feature":"kb","command":"search","event":"sqlite.open","message":"opened database"}
+{"ts":"2026-05-13T10:00:00.000Z","level":"info","msg":"opened database","pkg":"@lawchers/kb","event":"sqlite.open","traceId":"abc","details":{"database":"kb"}}
 ```
 
 Logs must not contain API keys, full material text, or sensitive user content.

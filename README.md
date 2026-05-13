@@ -2,7 +2,7 @@
 
 `lawchers-skills` is a planned monorepo for reusable agent skills and local CLIs for document, memory, legal knowledge, and case workbench workflows.
 
-This repository is currently in planning/scaffolding stage. It does not yet contain runnable CLI implementations.
+Phase 1 foundation packages are locally verified at `0.1.0`; runnable business CLIs are not implemented yet.
 
 ## Positioning
 
@@ -30,9 +30,9 @@ The first implementation wave is split into five project plans:
 ## Repository Map
 
 - `packages/cli/`: future aggregate `lawchers` command.
-- `packages/shared-core/`: future result protocol, config, errors, logging, observability.
-- `packages/local-store/`: future JSON store, debounced persistence, file locking.
-- `packages/embedding-provider/`: future OpenAI-compatible embeddings and similarity helpers.
+- `packages/shared-core/`: result protocol, config, errors, logging, observability.
+- `packages/local-store/`: JSON store, debounced persistence, file locking.
+- `packages/embedding-provider/`: OpenAI-compatible embeddings and similarity helpers.
 - `packages/memory-cli/`: future long-term memory CLI.
 - `packages/material-cli/`: future local material parsing CLI.
 - `packages/kb-cli/`: future legal knowledge base CLI.
@@ -63,6 +63,12 @@ This keeps each skill's command contract, fixtures, implementation, and tests in
 - [Security](./docs/security.md)
 - [Testing](./docs/testing.md)
 
+## Runtime
+
+Phase 1 supports Node.js `>=20` with npm. The package manager is locked in `package.json`.
+
+Bun and Deno are not supported in the first version.
+
 ## Release Rule
 
 No skill is considered released until it is listed in both:
@@ -70,4 +76,13 @@ No skill is considered released until it is listed in both:
 - `README.md`
 - `.claude-plugin/plugin.json`
 
-Draft, personal, in-progress, and deprecated skills must not appear in the plugin manifest. During planning, the manifest remains empty.
+Draft, personal, in-progress, and deprecated skills must not appear in the plugin manifest. The repository keeps an empty `.claude-plugin/plugin.json` manifest during Phase 1 and does not publish skills yet.
+
+## Development
+
+```bash
+npm install
+npm run typecheck
+npm test
+npm run build
+```

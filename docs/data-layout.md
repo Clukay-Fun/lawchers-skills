@@ -4,11 +4,14 @@
 
 Default data root resolution:
 
-1. `--home <path>`
+1. Explicit `home` argument or future `--home <path>`
 2. `LAWCHERS_HOME`
-3. `XDG_DATA_HOME/lawchers`
-4. `~/.local/share/lawchers`
-5. Windows fallback: `%LOCALAPPDATA%/lawchers`
+3. Windows: `%LOCALAPPDATA%/lawchers`
+4. macOS: `~/Library/Application Support/lawchers`
+5. Linux/other with `XDG_DATA_HOME`: `$XDG_DATA_HOME/lawchers`
+6. Linux/other fallback: `~/.local/share/lawchers`
+
+`resolveLawchersHome()` only resolves the path. It does not create the directory and does not check writability; setup/doctor commands own those checks.
 
 ## Suggested Layout
 

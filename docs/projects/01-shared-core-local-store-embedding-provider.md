@@ -1,5 +1,9 @@
 # Project 1: Shared Core / Local Store / Embedding Provider
 
+## Status
+
+Phase 1 foundation packages are locally verified at `0.1.0`. Business CLIs have not started.
+
 ## Goal
 
 Build the horizontal foundation used by every later CLI package.
@@ -17,16 +21,15 @@ Packages:
 - Unified result/error types.
 - Stable error codes.
 - Config resolution.
-- Lightweight logger.
+- Lightweight stderr JSON-lines logger.
 - Trace IDs and observability event shape.
 
 `local-store`:
 
 - JSON load/save helpers.
 - Debounced save and explicit flush.
-- Lock file behavior.
-- Atomic rename.
-- Temp workspace naming helpers if shared by later packages.
+- Cross-platform locking via `proper-lockfile`.
+- Atomic write with Windows replacement fallback.
 
 `embedding-provider`:
 
@@ -57,6 +60,9 @@ Packages:
 - Config follows `docs/config.md`.
 - Data layout follows `docs/data-layout.md`.
 - Error codes are documented in `docs/error-codes.md`.
+- Runtime is Node.js `>=20` with npm; Bun and Deno are not supported in Phase 1.
+- Logger fields are fixed as `ts`, `level`, `msg`, `pkg`, `event`, `traceId?`, `details?`.
+- Public APIs are exported only through each package `src/index.ts`.
 
 ## Acceptance Criteria
 
@@ -65,6 +71,7 @@ Packages:
 - Lock timeout returns a stable error.
 - Embedding tests can pass without real provider keys.
 - Public exports are small and documented.
+- Provider disabled state is distinct from provider unavailable state.
 
 ## Risks
 

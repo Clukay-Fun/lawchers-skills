@@ -1,32 +1,21 @@
 # Error Codes
 
-Error codes are stable API surface for agents. Add new codes intentionally and document them here.
+Error codes are stable API surface for agents. Phase 1 freezes the shared set below. Feature packages must reuse these codes; adding a new code requires updating `@lawchers/shared-core` and this document first.
 
-## Shared
+## Phase 1 Shared Set
 
-- `CONFIG_INVALID`: configuration exists but is not valid.
-- `PROVIDER_UNAVAILABLE`: selected provider is missing or cannot be used.
-- `IO_ERROR`: file or directory operation failed.
 - `MISSING_FIELD`: required input is missing.
-- `TIMEOUT`: command exceeded timeout.
-- `INTERNAL_ERROR`: unexpected failure.
-
-## Data And Migration
-
-- `SCHEMA_UNSUPPORTED`: database schema cannot be read by this CLI version.
-- `MIGRATION_FAILED`: migration did not complete.
+- `INVALID_INPUT`: input is present but invalid for the requested operation.
+- `CONFIG_INVALID`: configuration exists but is not valid.
+- `IO_ERROR`: file or directory operation failed.
 - `LOCK_TIMEOUT`: file or database lock could not be acquired in time.
-
-## Material
-
-- `PATH_NOT_ALLOWED`: requested path is outside allowed roots.
-- `ARCHIVE_UNSAFE`: archive failed safety checks.
-- `FILE_TOO_LARGE`: file exceeds configured limits.
-- `UNSUPPORTED_FILE_TYPE`: parser does not support the file type.
+- `PROVIDER_UNAVAILABLE`: selected provider is missing, misconfigured, unreachable, or returned an invalid response.
+- `PROVIDER_DISABLED`: selected provider is intentionally disabled.
+- `TIMEOUT`: command or provider operation exceeded timeout.
 - `PARSE_FAILED`: parsing failed after fallback chain.
-
-## Confidence And Safety
-
 - `LOW_CONFIDENCE`: command refused to produce a write or final claim at low confidence.
-- `CONFIRMATION_REQUIRED`: command requires explicit confirmation before proceeding.
-- `UNSAFE_INPUT`: input violates safety constraints.
+- `UNKNOWN`: unexpected failure.
+
+## Diagnostics
+
+Errors default to stack-free JSON. Diagnostic layers may include stack details only when `LAWCHERS_DEBUG=1`.
