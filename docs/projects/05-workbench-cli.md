@@ -1,17 +1,17 @@
-# Project 5: Workbench CLI
+# Project 5: Case Workbench
 
 ## Goal
 
-Provide local workbench generation for evidence, timelines, dossiers, and optional labor-domain analysis.
+Provide local case workbench scripts for evidence, timelines, dossiers, and optional labor-domain analysis.
 
 Future commands:
 
 ```bash
-workbench evidence-extract <path>
-workbench timeline <json>
-workbench render <json>
-workbench dossier <folder>
-workbench labor analyze <folder>
+lawchers case-workbench evidence-extract <path>
+lawchers case-workbench timeline <json>
+lawchers case-workbench render <json>
+lawchers case-workbench dossier <folder>
+lawchers case-workbench labor analyze <folder>
 ```
 
 ## Scope
@@ -22,7 +22,7 @@ workbench labor analyze <folder>
 - Workbench Markdown rendering.
 - Local case context store.
 - Labor dispute analysis as an optional domain pack.
-- Colocated `case-workbench` skill documentation under `packages/workbench-cli/skills/case-workbench/`.
+- Colocated `case-workbench` skill documentation under `packages/cli/skills/case-workbench/`.
 
 ## Non-Goals
 

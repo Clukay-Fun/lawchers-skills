@@ -1,14 +1,20 @@
 # CLI Contract
 
-All first-wave CLIs share one contract.
+`lawchers` is the only official CLI entrypoint. Skill scripts register commands through the static feature registry instead of implementing independent CLI shells.
 
 ## Command Discovery
 
-Agent skills should try commands in this order:
+Agent skills should call:
 
-1. `lawchers <feature> ...`
-2. Standalone command such as `memory`, `material`, `kb`, or `workbench`
-3. `npx -y @lawchers/cli ...`
+```bash
+lawchers <domain> <command> [flags]
+```
+
+Current implemented domain:
+
+```bash
+lawchers memory ...
+```
 
 ## Stdout
 
@@ -47,19 +53,39 @@ Logs must not contain API keys, full material text, or sensitive user content.
 
 ## Exit Codes
 
-- `0`: success.
-- Non-zero: failure. Stdout still contains the error JSON object.
+- `0`: `ok: true`.
+- `2`: `ok: false` with `INVALID_INPUT`, `MISSING_FIELD`, or `CONFIG_INVALID`.
+- `1`: other standard `ok: false` results.
+- `70`: unexpected crash; stdout still contains a JSON error object.
 
 ## Common Flags
 
-Every CLI should support:
+The CLI kernel owns these global flags:
 
 ```bash
 --home <path>
---json
+--config-file <path>
 --log-level error|warn|info|debug|trace
 --trace-id <id>
---timeout-ms <number>
+```
+
+stdout is always JSON.
+
+## Unknown Commands
+
+`--help` is not implemented in Phase 2. Unknown domains or commands return `INVALID_INPUT` with discovery details:
+
+```json
+{
+  "ok": false,
+  "code": "INVALID_INPUT",
+  "message": "Unknown command: nope",
+  "details": {
+    "domain": "memory",
+    "command": "nope",
+    "availableCommands": ["doctor", "migrate", "learn", "recall", "list", "clear", "sync-obsidian"]
+  }
+}
 ```
 
 ## Path Rules

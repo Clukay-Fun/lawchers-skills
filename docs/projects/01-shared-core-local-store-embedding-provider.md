@@ -1,35 +1,27 @@
-# Project 1: Shared Core / Local Store / Embedding Provider
+# Project 1: CLI Foundation / Embedding Provider
 
 ## Status
 
-Phase 1 foundation packages are locally verified at `0.1.0`. Business CLIs have not started.
+Phase 1 foundation modules are locally verified inside `@lawchers/cli`. Skill scripts build on this shared foundation.
 
 ## Goal
 
-Build the horizontal foundation used by every later CLI package.
+Build the horizontal foundation used by every later skill script.
 
-Packages:
+Modules:
 
-- `packages/shared-core`
-- `packages/local-store`
-- `packages/embedding-provider`
+- `packages/cli/src/foundation`
+- `packages/cli/src/foundation/embedding-provider`
 
 ## Scope
 
-`shared-core`:
+`foundation`:
 
 - Unified result/error types.
 - Stable error codes.
 - Config resolution.
 - Lightweight stderr JSON-lines logger.
 - Trace IDs and observability event shape.
-
-`local-store`:
-
-- JSON load/save helpers.
-- Debounced save and explicit flush.
-- Cross-platform locking via `proper-lockfile`.
-- Atomic write with Windows replacement fallback.
 
 `embedding-provider`:
 
@@ -50,9 +42,8 @@ Packages:
 
 1. Define TypeScript contracts for result, error, logger, config, and provider config.
 2. Implement config source precedence and doctor helpers.
-3. Implement JSON store primitives with locking and atomic writes.
-4. Implement embedding provider adapter and similarity helpers.
-5. Add package-level tests and cross-package contract tests.
+3. Implement embedding provider adapter and similarity helpers.
+4. Add foundation-level tests and cross-module contract tests.
 
 ## Key Contracts
 
@@ -62,19 +53,17 @@ Packages:
 - Error codes are documented in `docs/error-codes.md`.
 - Runtime is Node.js `>=20` with npm; Bun and Deno are not supported in Phase 1.
 - Logger fields are fixed as `ts`, `level`, `msg`, `pkg`, `event`, `traceId?`, `details?`.
-- Public APIs are exported only through each package `src/index.ts`.
+- Public APIs are exported only through `packages/cli/src/foundation/index.ts`.
 
 ## Acceptance Criteria
 
 - Every helper is usable without Bridge runtime.
-- JSON store writes are atomic.
-- Lock timeout returns a stable error.
 - Embedding tests can pass without real provider keys.
 - Public exports are small and documented.
 - Provider disabled state is distinct from provider unavailable state.
 
 ## Risks
 
-- Over-abstracting before feature packages exist.
-- Accidentally importing feature-specific behavior into shared packages.
+- Over-abstracting before additional skill scripts exist.
+- Accidentally importing feature-specific behavior into foundation modules.
 - Logging sensitive content from provider payloads.

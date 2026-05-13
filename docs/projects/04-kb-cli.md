@@ -1,24 +1,24 @@
-# Project 4: KB CLI
+# Project 4: Legal KB
 
 ## Goal
 
-Provide a local legal knowledge base CLI for ingest, search, ask, stats, docs, and doctor flows.
+Provide local legal knowledge base scripts for ingest, search, ask, stats, docs, and doctor flows.
 
 Future commands:
 
 ```bash
-kb ingest <path>
-kb ingest-url <url>
-kb search <query>
-kb ask <question>
-kb docs
-kb stats
-kb doctor
+lawchers legal-kb ingest <path>
+lawchers legal-kb ingest-url <url>
+lawchers legal-kb search <query>
+lawchers legal-kb ask <question>
+lawchers legal-kb docs
+lawchers legal-kb stats
+lawchers legal-kb doctor
 ```
 
 ## Scope
 
-- File ingest through `material-cli` contracts.
+- File ingest through `material-tools` contracts.
 - URL ingest with readable content extraction.
 - Document list and document details.
 - SQLite persistence with schema versions.
@@ -27,7 +27,7 @@ kb doctor
 - Legal citation and statute reference retrieval.
 - Typed entries for case digest, practice note, and case reflow.
 - Optional rerank provider.
-- Colocated `legal-kb` skill documentation under `packages/kb-cli/skills/legal-kb/`.
+- Colocated `legal-kb` skill documentation under `packages/cli/skills/legal-kb/`.
 
 ## Non-Goals
 
@@ -50,7 +50,7 @@ kb doctor
 
 ## Ask Behavior
 
-`kb ask` should prefer grounded answers with citations. If retrieval confidence is too low, it should return `LOW_CONFIDENCE` instead of inventing authority.
+`lawchers legal-kb ask` should prefer grounded answers with citations. If retrieval confidence is too low, it should refuse with a stable error instead of inventing authority.
 
 ## Acceptance Criteria
 

@@ -7,24 +7,30 @@
 - Contract tests: stdout JSON, stderr JSON-lines logs, exit codes, paths, error codes.
 - Provider tests: mocked by default, real provider tests optional/nightly with secrets.
 
-## Fixture Layout
+## Local Test Layout
+
+Test code and fixtures are local development assets. They are intentionally kept out of package directories and ignored by git.
 
 ```text
-packages/material-cli/fixtures/
-  sample.txt
-  sample.docx
-  sample.pdf
-  sample-image.png
-  sample.zip
-packages/memory-cli/fixtures/
-  conversation.jsonl
-packages/kb-cli/fixtures/
-  statute.txt
-  case-digest.md
-packages/workbench-cli/fixtures/
-  evidence-folder/
-  timeline.json
+.local-tests/
+  shared-core/
+    tests/
+  embedding-provider/
+    tests/
+  cli/
+    tests/
+  memory-cli/
+    tests/
+    fixtures/
 ```
+
+Each local test project may symlink `src` back to its package source when that keeps imports simple:
+
+```text
+.local-tests/memory-cli/src -> ../../packages/cli/skills/memory-tools/scripts
+```
+
+Package directories should not commit `tests/` or `fixtures/` in the current lightweight development phase.
 
 ## Default Checks
 
@@ -32,17 +38,22 @@ packages/workbench-cli/fixtures/
 npm run lint
 npm run typecheck
 npm test
-npm run test:cli
 npm run build
 ```
 
+`npm test` is configured to read `.local-tests/**/*.test.ts`.
+
 ## Coverage Targets
 
-- `shared-core`, `local-store`, and `embedding-provider`: target 80%+ once implemented.
-- CLI packages: prioritize command parsing, JSON output, stable errors, paths, concurrency, and migration behavior.
+- `foundation` and `foundation/embedding-provider`: focus on contract stability, path behavior, config merging, and provider fallback.
+- `lawchers` and skill scripts: prioritize command parsing, JSON output, stable errors, paths, concurrency, and migration behavior.
 - OCR/provider behavior may use mocks in default CI.
 
 ## CI Matrix
+
+Current tests are local-only. Before enabling CI, decide whether to commit a public test suite or generate test fixtures during CI setup.
+
+Target matrix when CI is introduced:
 
 - Node.js LTS.
 - macOS, Linux, Windows.

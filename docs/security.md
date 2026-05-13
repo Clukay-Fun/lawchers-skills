@@ -30,7 +30,7 @@ Archive extraction must:
 
 Destructive or externally visible writes require confirmation unless a documented noninteractive flag is provided.
 
-Low-confidence writes must fail with `LOW_CONFIDENCE` instead of guessing.
+Low-confidence writes must refuse with a stable error before guessing; add a dedicated error code only when the first implementation needs it.
 
 ## Sensitive Data
 

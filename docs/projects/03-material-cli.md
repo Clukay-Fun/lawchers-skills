@@ -1,16 +1,16 @@
-# Project 3: Material CLI
+# Project 3: Material Tools
 
 ## Goal
 
-Provide the shared local material parsing foundation for files, folders, and archives.
+Provide the shared local material parsing scripts for files, folders, and archives.
 
 Future commands:
 
 ```bash
-material parse <path>
-material extract-text <path>
-material prepare <path>
-material inspect <path>
+lawchers material parse <path>
+lawchers material extract-text <path>
+lawchers material prepare <path>
+lawchers material inspect <path>
 ```
 
 ## Scope
@@ -21,7 +21,7 @@ material inspect <path>
 - Temp workspace creation, cleanup, and doctor cleanup.
 - OCR provider order and fallback chain.
 - Unified Markdown, plain text, sections, quality, and warning output.
-- Colocated `material-tools` skill documentation under `packages/material-cli/skills/material-tools/`.
+- Colocated `material-tools` skill documentation under `packages/cli/skills/material-tools/`.
 
 ## Non-Goals
 

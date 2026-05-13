@@ -4,17 +4,17 @@ This roadmap follows the five-project sequence from the source planning note.
 
 ## Stage 0: Planning Scaffold
 
-Status: current.
+Status: complete.
 
 Deliverables:
 
 - Project folders.
-- Skill placeholders colocated with their owning CLI packages.
+- Skill placeholders colocated under the single CLI package.
 - Development guidelines adapted for this repository.
 - CLI contract, data layout, config, error, security, and testing docs.
 - One development plan per first-wave project.
 
-Non-goals:
+Non-goals at scaffold time:
 
 - No runnable CLI.
 - No package publishing setup.
@@ -23,11 +23,12 @@ Non-goals:
 
 ## Stage 1: Shared Foundations
 
-Projects:
+Status: complete for local Phase 1 validation.
 
-- `shared-core`
-- `local-store`
-- `embedding-provider`
+Foundation modules:
+
+- `foundation`
+- `foundation/embedding-provider`
 
 Outcome:
 
@@ -35,28 +36,31 @@ Outcome:
 - Config source precedence.
 - Provider configuration shape.
 - Logging and trace contract.
-- Safe local persistence primitives.
 - Embedding request and similarity helpers.
 
-## Stage 2: Memory CLI
+## Stage 2: Memory Skill Scripts
 
-Project:
+Status: first local version implemented.
 
-- `memory-cli`
+Skill:
+
+- `memory-tools`
 
 Outcome:
 
 - SQLite memory store.
-- Recent, FTS5, and embedding recall.
+- Recent and FTS5 recall.
+- Embedding provider diagnosis; vector recall is deferred.
 - Memory extraction provider abstraction.
-- Obsidian profile sync.
+- Optional one-way Obsidian Markdown export.
 - Recall block format for agent prompt injection.
+- Unified command entrypoint: `lawchers memory ...`.
 
-## Stage 3: Material CLI
+## Stage 3: Material Tools
 
-Project:
+Skill:
 
-- `material-cli`
+- `material-tools`
 
 Outcome:
 
@@ -66,11 +70,11 @@ Outcome:
 - OCR provider fallback contract.
 - Strict file safety boundaries.
 
-## Stage 4: KB CLI
+## Stage 4: Legal KB
 
-Project:
+Skill:
 
-- `kb-cli`
+- `legal-kb`
 
 Outcome:
 
@@ -80,11 +84,11 @@ Outcome:
 - Legal citation-oriented retrieval.
 - Ask/search/docs/stats/doctor command set.
 
-## Stage 5: Workbench CLI
+## Stage 5: Case Workbench
 
-Project:
+Skill:
 
-- `workbench-cli`
+- `case-workbench`
 
 Outcome:
 

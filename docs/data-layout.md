@@ -4,7 +4,7 @@
 
 Default data root resolution:
 
-1. Explicit `home` argument or future `--home <path>`
+1. Explicit `home` argument or `--home <path>`
 2. `LAWCHERS_HOME`
 3. Windows: `%LOCALAPPDATA%/lawchers`
 4. macOS: `~/Library/Application Support/lawchers`
@@ -24,6 +24,8 @@ $LAWCHERS_HOME/
     cache/
   memory/
     memory.db
+    memory.db-wal
+    memory.db-shm
   kb/
     kb.db
     documents/
@@ -35,11 +37,12 @@ $LAWCHERS_HOME/
 ## Persistence Rules
 
 - SQLite databases live under `$LAWCHERS_HOME/<feature>/<feature>.db`.
+- The memory skill uses `$LAWCHERS_HOME/memory/memory.db` and works without Obsidian or provider keys.
 - JSON stores live under `$LAWCHERS_HOME/<feature>/*.json`.
 - Logs live under `$LAWCHERS_HOME/logs/`.
 - Temp workspaces live under `$LAWCHERS_HOME/material/temp/<timestamp>-<pid>-<random>/`.
 - Normal CLI exits should clean their own temp workspace.
-- Abandoned temp workspaces are cleaned by `material doctor --cleanup` or `lawchers doctor --cleanup`.
+- Abandoned temp workspaces are cleaned by `lawchers material doctor --cleanup` or `lawchers doctor --cleanup`.
 - Default temp TTL is 24 hours and may be overridden by `LAWCHERS_TEMP_TTL_HOURS` or config.
 
 ## Database Rules

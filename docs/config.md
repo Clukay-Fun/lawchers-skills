@@ -4,13 +4,14 @@
 
 Configuration is resolved in this precedence order, from highest to lowest:
 
-1. CLI arguments, such as `--provider`, `--model`, or `--base-url`.
+1. CLI arguments, such as `--home` or `--config-file`.
 2. Environment variables, such as `OPENAI_API_KEY`, `LAWCHERS_EMBEDDING_API_KEY`, or `LAWCHERS_OCR_API_KEY`.
-3. Project config: `./.lawchers/config.json`.
-4. User config: `$LAWCHERS_HOME/config.json` or `~/.lawchers/config.json`.
-5. Defaults.
+3. Explicit config file: `--config-file <path>`.
+4. Project config: `./.lawchers/config.json`.
+5. User config: `$LAWCHERS_HOME/config.json`.
+6. Defaults.
 
-`loadConfig()` merges internally in this order: defaults, legacy user config, user config, project config, explicit overrides.
+`loadConfig()` merges internally in this order: defaults, user config, project config, explicit config file, explicit code overrides.
 
 Merge semantics:
 
@@ -40,6 +41,29 @@ Merge semantics:
 }
 ```
 
+## Memory Config
+
+No memory config is required. The default is a local deterministic rule extractor:
+
+```json
+{
+  "memory": {
+    "extractor": {
+      "type": "rule",
+      "confidenceThreshold": 0.5
+    }
+  }
+}
+```
+
+Optional fields:
+
+- `memory.dbPath`: explicit SQLite DB path.
+- `memory.extractor.type`: `rule` or `noop`.
+- `memory.extractor.confidenceThreshold`: minimum confidence for the rule extractor.
+
+The current memory module reads `$LAWCHERS_HOME/config.json`, project `.lawchers/config.json`, and `--config-file <path>`.
+
 ## Secrets
 
 - Config files should store provider names, endpoints, models, timeouts, and feature switches.
@@ -52,7 +76,7 @@ Merge semantics:
 
 ## Doctor Checks
 
-`lawchers doctor --json` should eventually check:
+`lawchers doctor` should check:
 
 - Config JSON parseability.
 - Supported provider type.
