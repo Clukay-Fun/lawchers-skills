@@ -14,4 +14,4 @@ lawchers case-workbench labor analyze <folder>
 
 Future implementation code should live under `packages/cli/skills/case-workbench/scripts/`.
 
-See [Project 5](../../../../docs/projects/05-workbench-cli.md).
+See [Project 5](../../../../docs/projects/05-case-workbench.md).

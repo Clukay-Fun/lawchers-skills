@@ -13,4 +13,4 @@ lawchers material inspect <path>
 
 Future implementation code should live under `packages/cli/skills/material-tools/scripts/`.
 
-See [Project 3](../../../../docs/projects/03-material-cli.md).
+See [Project 3](../../../../docs/projects/03-material-tools.md).

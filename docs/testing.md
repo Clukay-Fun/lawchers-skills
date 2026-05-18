@@ -13,13 +13,13 @@ Test code and fixtures are local development assets. They are intentionally kept
 
 ```text
 .local-tests/
-  shared-core/
+  foundation/
     tests/
-  embedding-provider/
+  foundation-embedding/
     tests/
   cli/
     tests/
-  memory-cli/
+  memory-tools/
     tests/
     fixtures/
 ```
@@ -27,7 +27,7 @@ Test code and fixtures are local development assets. They are intentionally kept
 Each local test project may symlink `src` back to its package source when that keeps imports simple:
 
 ```text
-.local-tests/memory-cli/src -> ../../packages/cli/skills/memory-tools/scripts
+.local-tests/memory-tools/src -> ../../packages/cli/skills/memory-tools/scripts
 ```
 
 Package directories should not commit `tests/` or `fixtures/` in the current lightweight development phase.

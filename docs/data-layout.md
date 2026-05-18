@@ -38,7 +38,6 @@ $LAWCHERS_HOME/
 
 - SQLite databases live under `$LAWCHERS_HOME/<feature>/<feature>.db`.
 - The memory skill uses `$LAWCHERS_HOME/memory/memory.db` and works without Obsidian or provider keys.
-- JSON stores live under `$LAWCHERS_HOME/<feature>/*.json`.
 - Logs live under `$LAWCHERS_HOME/logs/`.
 - Temp workspaces live under `$LAWCHERS_HOME/material/temp/<timestamp>-<pid>-<random>/`.
 - Normal CLI exits should clean their own temp workspace.

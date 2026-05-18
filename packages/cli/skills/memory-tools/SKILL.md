@@ -1,6 +1,6 @@
 ---
 name: memory-tools
-description: Use the local Lawchers memory CLI to learn, recall, list, clear, diagnose, and export durable user memories.
+description: Use lawchers memory skill scripts to learn, recall, list, clear, diagnose, and export durable user memories.
 ---
 
 # memory-tools

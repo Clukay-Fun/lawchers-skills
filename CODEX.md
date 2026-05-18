@@ -5,7 +5,7 @@
 ## 当前方向
 
 - 项目目标是轻便、可维护、Agent 友好的本地工具体系。
-- 不把每个功能都做成一套完整独立 CLI；优先建设统一的 `lawchers` 地基 CLI，再让 memory、material、legal-kb、case-workbench 作为功能模块扩展。
+- 不把每个功能都做成一套完整独立 CLI；只保留统一的 `lawchers` 地基 CLI，再让 memory、material、legal-kb、case-workbench 作为 skill scripts 扩展。
 - Skill 负责告诉 Agent 什么时候调用、如何调用、有哪些安全边界；CLI 负责确定性执行、JSON 输出、本地文件和数据库操作。
 - Bridge 仅作为能力边界、数据结构、产品体验、命令接口和测试场景参考，不复制 Bridge 运行时代码、会话管理、卡片模板、队列调度、回调机制或平台适配器。
 
@@ -22,9 +22,9 @@
 
 - stdout 必须保持可解析 JSON。
 - stderr 日志必须是 JSON-lines。
-- 错误码复用 `shared-core` 的 `ErrorCode`，新增错误码必须先改 `shared-core` 和文档。
+- 错误码复用 `packages/cli/src/foundation/errors.ts` 的 `ErrorCode`，新增错误码必须先改 foundation 和文档。
 - destructive 或不可逆命令必须有显式确认参数。
-- 缺少参数、低置信度、配置错误、provider 不可用都要返回稳定错误结构。
+- 缺少参数、配置错误、provider 不可用等失败都要返回稳定错误结构。
 - 默认优先本地、确定性、无后台服务；只有用户明确配置时才访问外部 provider。
 
 ## Skill 准则
@@ -32,13 +32,13 @@
 - Skill 只写 Agent 使用说明、路由规则、输入输出约束和安全边界，不隐藏业务状态。
 - Skill 应调用统一入口 `lawchers <domain> <command>`。
 - repo-local skill 不应再推荐独立业务 CLI 命令。
-- 已发布 skill 必须说明：主命令、输入、JSON 输出、常见错误码、低置信度处理、配置失败处理和 fallback 行为。
+- 已发布 skill 必须说明：主命令、输入、JSON 输出、常见错误码、配置失败处理和 fallback 行为。
 - 草稿、开发中、个人使用或废弃 skill 不得进入 `.claude-plugin/plugin.json`。
 
 ## 文件与注释准则
 
 - 所有代码文件必须有文件头注释。
-- 头注释采用当前 `memory-cli` 风格，至少包含：
+- 头注释采用当前 `memory-tools/scripts` 风格，至少包含：
 
 ```ts
 /**
@@ -61,7 +61,6 @@
 - OCR、parser、provider 调用必须有 timeout。
 - 日志不得包含 API key、完整文档正文、敏感用户内容或大段原文。
 - SQLite 使用 WAL、transaction 和 busy timeout。
-- JSON store 使用文件锁与 atomic write。
 
 ## 测试与验证
 

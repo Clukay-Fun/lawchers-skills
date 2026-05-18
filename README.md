@@ -161,7 +161,7 @@ packages/cli/
 - [数据布局](./docs/data-layout.md)
 - [错误码](./docs/error-codes.md)
 - [测试策略](./docs/testing.md)
-- [Memory 使用说明](./docs/memory-cli.md)
+- [Memory 使用说明](./docs/memory-tools.md)
 
 ## 数据与配置
 

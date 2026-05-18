@@ -18,7 +18,7 @@ packages/cli/skills/memory-tools/SKILL.md
 
 ## Goal
 
-Provide a lightweight local long-term memory CLI for agents, including learning, recall, listing, clearing, doctor checks, migrations, and explicit Markdown export.
+Provide lightweight local long-term memory skill scripts for agents, including learning, recall, listing, clearing, doctor checks, migrations, and explicit Markdown export.
 
 ## Implemented Commands
 
