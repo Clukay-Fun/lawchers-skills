@@ -1,0 +1,7 @@
+# Development docs / plans (not for version control)
+docs/
+**/docs/plan/
+legal-desensitizer/tmp/
+legal-desensitizer/*.egg-info/
+legal-desensitizer/.pytest_cache/
+legal-desensitizer/dist/
