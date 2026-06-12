@@ -126,6 +126,7 @@ def _build_tokenizer(vocab_path: Path, config_path: Optional[Path] = None):
     """
     from tokenizers import Tokenizer
     from tokenizers.models import WordPiece
+    from tokenizers.normalizers import BertNormalizer
     from tokenizers.pre_tokenizers import BertPreTokenizer
     from tokenizers.processors import BertProcessing
 
@@ -150,6 +151,9 @@ def _build_tokenizer(vocab_path: Path, config_path: Optional[Path] = None):
     vocab = WordPiece.from_file(str(vocab_path), unk_token="[UNK]")
 
     tok = Tokenizer(vocab)
+    # BERT 中文处理：在每个 CJK 字符周围加空白，使其各自成为独立 token
+    # （否则连续中文被当作一个词切成 张/##三/##向，token id 全错 → 模型输出全 O）
+    tok.normalizer = BertNormalizer(handle_chinese_chars=True)
     tok.pre_tokenizer = BertPreTokenizer()
 
     # Add CLS/SEP post-processor

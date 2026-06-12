@@ -118,7 +118,14 @@ def _label_prefix_for(entity_type: str, rules) -> str:
     for rule in rules:
         if rule.entity_type == entity_type:
             return rule.label_prefix
-    return entity_type
+    return {
+        "PER": "人物",
+        "PERSON": "人物",
+        "LOC": "地点",
+        "LOCATION": "地点",
+        "ORG": "机构",
+        "MONEY": "金额",
+    }.get(entity_type, entity_type)
 
 
 def _apply_occurrence_replacements(text: str, replacements: List[dict]) -> Tuple[str, List[dict]]:

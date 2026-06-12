@@ -260,14 +260,14 @@ class TestCLIScanCommands:
         assert os.path.exists(map_file)
         assert os.path.exists(audit_file)
 
-        with open(map_file) as f:
+        with open(map_file, encoding="utf-8") as f:
             map_data = json.load(f)
         assert map_data["pipeline"] == "scan"
         assert map_data["verification"] == "irreversible"
         assert map_data["restore_supported"] is False
         assert map_data["best_effort"] is True
 
-        with open(audit_file) as f:
+        with open(audit_file, encoding="utf-8") as f:
             audit_data = json.load(f)
         assert audit_data["pipeline"] == "scan"
         best_effort = [w for w in audit_data["warnings"] if w["type"] == "best_effort_notice"]

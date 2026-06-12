@@ -79,6 +79,13 @@ class TestRegexEngine:
         spans = scan_regex(text, rules)
         assert any(s.entity_type == "CASE_NO" for s in spans)
 
+    def test_money_match(self, rules):
+        text = "请求支付货款人民币壹佰万元，并承担违约金¥12000。"
+        spans = scan_regex(text, rules)
+        money = [s.text for s in spans if s.entity_type == "MONEY"]
+        assert "人民币壹佰万元" in money
+        assert "¥12000" in money
+
     def test_no_match(self, rules):
         text = "没有敏感信息的文本。"
         spans = scan_regex(text, rules)
@@ -107,6 +114,26 @@ class TestNERInterface:
                 source_sha256=hashlib.sha256("电话13800138000。".encode("utf-8")).hexdigest(),
                 mode="regex+ner",
             )
+
+    def test_regex_plus_ner_audit_marks_best_effort(self, rules, monkeypatch):
+        def fake_scan_ner(text, model_dir=None):
+            return [Span("PER", 0, 2, "张三", "ner", priority=80, discovery_order=0)], []
+
+        monkeypatch.setattr("legal_desens.redact.scan_ner_with_warnings", fake_scan_ner)
+        text = "张三电话13800138000。"
+        source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        redacted_text, map_data, audit_data = redact(
+            text=text,
+            rules=rules,
+            source_sha256=source_sha,
+            mode="regex+ner",
+        )
+
+        assert "人物1" in redacted_text
+        assert map_data["mode"] == "regex+ner"
+        assert audit_data["best_effort"] is True
+        assert any(w["type"] == "best_effort_notice" for w in audit_data["warnings"])
 
 
 # ── 4. Span merge ─────────────────────────────────────────────────────────────
@@ -184,6 +211,29 @@ class TestLabelAllocator:
         _, l2 = alloc.get_label("EMAIL", "test@x.com")
         assert l1 == "手机号1"
         assert l2 == "邮箱1"
+
+    def test_ner_entity_types_use_chinese_default_prefixes(self, rules):
+        alloc = LabelAllocator(rules)
+        _, per = alloc.get_label("PER", "张三")
+        _, loc = alloc.get_label("LOC", "北京市")
+        _, org = alloc.get_label("ORG", "人民法院")
+        _, money = alloc.get_label("MONEY", "10000元")
+        assert per == "人物1"
+        assert loc == "地点1"
+        assert org == "机构1"
+        assert money == "金额1"
+
+    def test_person_label_alias(self, rules):
+        """PERSON maps to same Chinese prefix as PER."""
+        alloc = LabelAllocator(rules)
+        _, label = alloc.get_label("PERSON", "张三")
+        assert label == "人物1"
+
+    def test_location_label_alias(self, rules):
+        """LOCATION maps to same Chinese prefix as LOC."""
+        alloc = LabelAllocator(rules)
+        _, label = alloc.get_label("LOCATION", "北京市")
+        assert label == "地点1"
 
 
 # ── 6. Redact + Restore round-trip ───────────────────────────────────────────
@@ -299,6 +349,46 @@ class TestRoundTrip:
         restored_sha = hashlib.sha256(restored_bytes).hexdigest()
 
         assert restored_sha == source_sha, "SHA-256 mismatch: round-trip not byte-identical"
+
+    def test_money_roundtrip_with_chinese_label(self, rules):
+        """MONEY regex redacts with Chinese label '金额' and round-trips correctly."""
+        text = "支付货款人民币壹佰万元整，另付违约金¥12000。"
+        source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        redacted_text, map_data, _ = redact(text, rules, source_sha, mode="regex-only")
+
+        # MONEY entities must use Chinese label prefix
+        assert "金额1" in redacted_text
+        assert "金额2" in redacted_text
+        assert "壹佰万" not in redacted_text
+        assert "12000" not in redacted_text
+
+        # Verify entities in map
+        money_entities = [e for e in map_data["entities"] if e["entity_type"] == "MONEY"]
+        assert len(money_entities) >= 2
+        for e in money_entities:
+            assert e["replacement"].startswith("金额")
+
+        # Round-trip
+        redacted_sha = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
+        map_data["redacted_sha256"] = redacted_sha
+        restored = restore(redacted_text, map_data, redacted_file_sha256=redacted_sha)
+        assert restored == text
+
+    def test_money_plus_phone_roundtrip_chinese_labels(self, rules):
+        """MONEY + PHONE coexist, both use Chinese labels, round-trip intact."""
+        text = "原告张三，电话13800138000，诉请支付人民币伍万元。"
+        source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+        redacted_text, map_data, _ = redact(text, rules, source_sha, mode="regex-only")
+
+        assert "手机号1" in redacted_text
+        assert "金额1" in redacted_text
+
+        redacted_sha = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
+        map_data["redacted_sha256"] = redacted_sha
+        restored = restore(redacted_text, map_data, redacted_file_sha256=redacted_sha)
+        assert restored == text
 
 
 # ── 7. SHA-256 mismatch detection ─────────────────────────────────────────────
@@ -487,7 +577,6 @@ class TestCLI:
                 "-m",
                 "pip",
                 "wheel",
-                "--no-build-isolation",
                 "--no-deps",
                 "--wheel-dir",
                 str(dist_dir),
@@ -507,8 +596,12 @@ class TestCLI:
             text=True,
         )
 
-        python = venv_dir / "bin" / "python"
-        legal_desens = venv_dir / "bin" / "legal-desens"
+        if os.name == "nt":
+            python = venv_dir / "Scripts" / "python.exe"
+            legal_desens = venv_dir / "Scripts" / "legal-desens.exe"
+        else:
+            python = venv_dir / "bin" / "python"
+            legal_desens = venv_dir / "bin" / "legal-desens"
         wheel = next(dist_dir.glob("*.whl"))
         subprocess.run(
             [str(python), "-m", "pip", "install", "--no-deps", str(wheel)],

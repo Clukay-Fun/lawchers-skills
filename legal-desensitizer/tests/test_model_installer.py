@@ -400,18 +400,18 @@ class TestInstallModelEntryPoint:
 class TestModelDirSearchOrder:
     def test_explicit_dir_highest_priority(self):
         d = _resolve_model_dir("/explicit/path")
-        assert str(d) == "/explicit/path"
+        assert str(d) == os.path.normpath("/explicit/path")
 
     def test_env_var_second_priority(self, monkeypatch):
         monkeypatch.setenv("LEGAL_DESENS_MODEL_DIR", "/env/path")
         monkeypatch.delenv("LEGAL_DESENS_MODEL_DIR", raising=False)
         # With explicit
         d = _resolve_model_dir("/explicit")
-        assert str(d) == "/explicit"
+        assert str(d) == os.path.normpath("/explicit")
         # Without explicit
         monkeypatch.setenv("LEGAL_DESENS_MODEL_DIR", "/env/path")
         d = _resolve_model_dir(None)
-        assert str(d) == "/env/path"
+        assert str(d) == os.path.normpath("/env/path")
 
     def test_user_dir_third_priority(self, tmp_path, monkeypatch):
         """When no --model-dir and no env, user-level dir is checked."""

@@ -688,7 +688,7 @@ class TestCLIDocumentIO:
         assert os.path.exists(map_out)
         assert os.path.exists(audit_out)
 
-        with open(map_out) as f:
+        with open(map_out, encoding="utf-8") as f:
             map_data = json.load(f)
         assert map_data["document_type"] == "docx"
 

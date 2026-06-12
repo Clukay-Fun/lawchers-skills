@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import tempfile
+from urllib.parse import unquote, urlparse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -102,6 +103,22 @@ def validate_model_dir(model_dir: Path) -> None:
 # ── Manifest ─────────────────────────────────────────────────────────────────
 
 
+def infer_model_name(source: str, src_path: str) -> str:
+    """Return a human-readable model name for manifest metadata."""
+    if source == "from-app":
+        return "RobertaCrfNerModel"
+
+    parsed = urlparse(src_path)
+    filename = Path(unquote(parsed.path)).name
+    if filename.endswith(".tar.gz"):
+        return filename[:-7]
+    if filename.endswith(".zip"):
+        return filename[:-4]
+    if filename:
+        return Path(filename).stem
+    return "NerOnnxModel"
+
+
 def build_manifest(
     source: str,
     src_path: str,
@@ -117,7 +134,7 @@ def build_manifest(
             total_size += item.stat().st_size
 
     return {
-        "name": "RobertaCrfNerModel",
+        "name": infer_model_name(source, src_path),
         "format": "onnx",
         "source": source,
         "src_path": src_path,
