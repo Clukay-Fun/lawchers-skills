@@ -8,6 +8,8 @@
 #
 # Environment overrides:
 #   LEGAL_DESENS_INSTALL_TARGET  Project path or wheel path. Defaults to repo root.
+#   LEGAL_DESENS_MODEL_URL       Model archive URL, e.g. GitHub Release Asset.
+#   LEGAL_DESENS_MODEL_SHA256    Required when LEGAL_DESENS_MODEL_URL is set.
 #   LEGAL_DESENS_MODEL_SRC       Source ydner_onnx directory. Defaults to app path.
 #   LEGAL_DESENS_MODEL_TARGET    Target model directory.
 #   LEGAL_DESENS_SKIP_MODEL=1    Install CLI only, skip model install.
@@ -19,10 +21,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 INSTALL_TARGET="${LEGAL_DESENS_INSTALL_TARGET:-$PROJECT_DIR}"
+MODEL_URL="${LEGAL_DESENS_MODEL_URL:-}"
+MODEL_SHA256="${LEGAL_DESENS_MODEL_SHA256:-}"
 MODEL_SRC="${LEGAL_DESENS_MODEL_SRC:-/Applications/Desensitization/ydner_onnx}"
 MODEL_TARGET="${LEGAL_DESENS_MODEL_TARGET:-}"
 SKIP_MODEL="${LEGAL_DESENS_SKIP_MODEL:-0}"
 FORCE_MODEL="${LEGAL_DESENS_FORCE_MODEL:-0}"
+
+if [ "$SKIP_MODEL" != "1" ] && [ -n "$MODEL_URL" ] && [ -z "$MODEL_SHA256" ]; then
+    echo "ERROR: LEGAL_DESENS_MODEL_SHA256 is required when LEGAL_DESENS_MODEL_URL is set." >&2
+    exit 1
+fi
 
 PIP="pip3"
 if ! command -v pip3 >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then
@@ -34,7 +43,7 @@ echo "==> Installing legal-desens"
 
 echo ""
 echo "==> Verifying CLI"
-legal-desens --help >/dev/null
+python3 -m legal_desens.cli --help >/dev/null
 echo "    legal-desens: OK"
 
 if [ "$SKIP_MODEL" = "1" ]; then
@@ -45,7 +54,11 @@ fi
 
 echo ""
 echo "==> Installing NER model"
-INSTALL_ARGS=(install-model --from-app --src "$MODEL_SRC")
+if [ -n "$MODEL_URL" ]; then
+    INSTALL_ARGS=(install-model --url "$MODEL_URL" --sha256 "$MODEL_SHA256")
+else
+    INSTALL_ARGS=(install-model --from-app --src "$MODEL_SRC")
+fi
 if [ -n "$MODEL_TARGET" ]; then
     INSTALL_ARGS+=(--target "$MODEL_TARGET")
 fi
@@ -53,14 +66,14 @@ if [ "$FORCE_MODEL" = "1" ]; then
     INSTALL_ARGS+=(--force)
 fi
 
-legal-desens "${INSTALL_ARGS[@]}"
+python3 -m legal_desens.cli "${INSTALL_ARGS[@]}"
 
 echo ""
 echo "==> Inspecting NER model"
 if [ -n "$MODEL_TARGET" ]; then
-    legal-desens ner-inspect --model-dir "$MODEL_TARGET" >/dev/null
+    python3 -m legal_desens.cli ner-inspect --model-dir "$MODEL_TARGET" >/dev/null
 else
-    legal-desens ner-inspect >/dev/null
+    python3 -m legal_desens.cli ner-inspect >/dev/null
 fi
 echo "    NER model: OK"
 

@@ -26,7 +26,7 @@
 
 - Python ≥ 3.9
 - 依赖（`pip install .` 自动装）：`onnxruntime`、`tokenizers`、`lxml`、`python-docx`、`openpyxl`
-- **NER 可选**：需要本地 RobertaCrfNerModel（ONNX）。若本机已安装华宇远点「智能文档脱敏系统」，模型就在 `/Applications/Desensitization/ydner_onnx/`，可一键导入（见下）。没有模型也能用，只是退化为 `--regex-only`。
+- **NER 可选（best-effort）**：默认 `--regex-only` 无需任何模型即可用。想额外识别人名/机构/地址，可接入一个**兼容的中文 token-classification ONNX 模型**：用自带脚本导出一个开源模型（推荐，见「启用 NER」一节），或自带模型用 `--model-dir` 指向。没有模型完全不影响使用。
 
 ## 安装
 
@@ -45,10 +45,14 @@ legal-desens --help
 
 ### 安装并准备 NER 模型（一条命令）
 
-交付机器上若已安装华宇远点「智能文档脱敏系统」，推荐使用安装脚本把 CLI 和本地 NER 模型一起准备好：
+> 默认 `--regex-only` 无需模型即可使用。若要启用 NER，推荐从本仓库 GitHub Release Asset 下载已经导出的 ONNX 模型包，并用 SHA-256 校验安装。
+
+一条命令安装 CLI + 下载/安装 NER 模型：
 
 ```bash
 cd legal-desensitizer
+LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
@@ -56,14 +60,19 @@ bash scripts/install_with_model.sh
 
 ```text
 pip install .
-legal-desens install-model --from-app
+legal-desens install-model --url <GitHub Release Asset URL> --sha256 <SHA256>
 legal-desens ner-inspect
 ```
 
 常用环境变量：
 
 ```bash
-# App 模型目录不在默认路径时
+# 从 GitHub Release Asset 下载模型（推荐）
+LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
+bash scripts/install_with_model.sh
+
+# legacy/import-only：已有本地兼容模型目录时导入
 LEGAL_DESENS_MODEL_SRC=/path/to/ydner_onnx bash scripts/install_with_model.sh
 
 # 只安装 CLI，不安装模型
@@ -134,25 +143,70 @@ pip install ".[dev,ocr]" && pytest
 > 不装 `[ocr]` 时，core（txt/md/csv/docx/xlsx）测试全绿即可视为可用；OCR scan 相关用例需 `[ocr]` extra 才会通过。
 > NER 相关用例在未装模型时自动跳过（skipped），属正常。
 
-## 安装 NER 模型（可选，启用实体识别）
+## 启用 NER（可选，best-effort）
+
+默认 `--regex-only` 不需要模型。要额外识别人名/机构/地址，按下面任一方式接入一个兼容的 ONNX 模型。
+
+### 推荐：从 GitHub Release Asset 下载模型包
+
+模型权重不进入 git 仓库。推荐把导出的 ONNX 模型包放到本仓库的 GitHub Release Asset 中，然后用 URL + SHA-256 安装：
 
 ```bash
-# 主模式：从本机已装 App 导入（无网络、无再分发风险）
-legal-desens install-model --from-app
-# 若 App 不在默认路径，用 --src 指定模型目录：
-# legal-desens install-model --from-app --src /path/to/ydner_onnx
+legal-desens install-model \
+  --url "https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+  --sha256 "d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703"
 
-# 或下载模式（需你提供包 URL 与校验值）
-# legal-desens install-model --url <URL> --sha256 <HASH>
+legal-desens ner-inspect
 ```
 
-模型落地到 `~/.legal-desens/models/roberta-crf-ner/`。验证：
+Release Asset 模型包必须是 `.zip` 或 `.tar.gz`，解压后顶层包含：
+
+```text
+model.onnx
+config.json
+vocab.txt
+labels.json 或 config.json 内含 id2label/label2id
+```
+
+建议 Release 命名：
+
+```text
+tag:   legal-desens-ner-v0.1
+asset: bert4ner-base-chinese-onnx.zip
+```
+
+下载链接和 SHA-256 应同步记录在 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
+
+### 本地导出开源模型
+
+用自带脚本把 HuggingFace 上的中文 NER 模型导出成可用目录（示例为 Apache-2.0 候选）：
 
 ```bash
-legal-desens ner-inspect      # 打印模型 I/O 与 label；成功 = NER 可用
+pip install ".[dev]" transformers torch onnx     # 仅导出时需要
+python scripts/export_hf_ner_onnx.py \
+  --hf-model shibing624/bert4ner-base-chinese \
+  --output-dir ~/ner-bert4ner
+legal-desens ner-inspect --model-dir ~/ner-bert4ner          # 成功 = NER 可用
+legal-desens redact input.txt --model-dir ~/ner-bert4ner --out ... --map ... --audit ...
 ```
+
+候选模型的 license、训练数据与已知局限见 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
+
+### 其他方式
+
+```bash
+# 自托管模型包下载（GitHub Release Asset / 对象存储均可）
+legal-desens install-model --url <URL> --sha256 <HASH>
+
+# legacy：若本机恰好已有一个兼容模型目录，可直接导入
+legal-desens install-model --from-app --src /path/to/model_dir
+```
+
+`install-model` 装好的模型落地到 `~/.legal-desens/models/roberta-crf-ner/`。
 
 NER 模型搜索顺序：`--model-dir` → `LEGAL_DESENS_MODEL_DIR` → `~/.legal-desens/models/roberta-crf-ner` → `/Applications/Desensitization/ydner_onnx`（兜底）。
+
+> **NER 是可选 best-effort 增强，不是安全保证。** 默认 `--regex-only` 处理结构化 PII（手机/身份证/邮箱/案号/信用代码/金额）为可靠核心。启用 NER 可额外识别人名/地址/机构名，但通用模型可能漏公司名、漏地址尾段、无金额识别。audit 中会标注 `best_effort`。参考 `references/optional-ner-models.md` 了解候选模型详情。
 
 ---
 
@@ -224,23 +278,22 @@ legal-desens redact-scan input.png --ocr rapidocr \
 ## 真机脱敏流程（端到端）
 
 ```bash
-# 1) 安装、准备 NER，并自测
-bash scripts/install_with_model.sh
-pip install ".[dev]" && pytest
+# 1) 安装并自测（默认 regex-only，无需任何模型）
+pip install . && pip install ".[dev]" && pytest
 
-# 2) 确认 NER 可用
-legal-desens ner-inspect            # 成功 → 下一步去掉 --regex-only
-
-# 3) 脱敏一份真实文档
+# 2) 脱敏一份真实文档（regex-only 即可用）
 legal-desens redact 合同.docx \
-  --level strict \
+  --level strict --regex-only \
   --out 合同.redacted.docx --map 合同.map.json --audit 合同.audit.json
 
-# 4) 核对审计
+# 3) 核对审计
 cat 合同.audit.json                  # 看 summary 与 residual_scan / warnings
 
-# 5)（需要时）还原
+# 4)（需要时）还原
 legal-desens restore 合同.redacted.docx --map 合同.map.json --out 合同.restored.docx
+
+# 5)（可选）启用 NER：导出一个开源模型后，去掉 --regex-only
+#    见上文「启用 NER」一节；NER 为 best-effort，可能漏公司名/地址
 ```
 
 ## 安全约定
@@ -249,6 +302,7 @@ legal-desens restore 合同.redacted.docx --map 合同.map.json --out 合同.res
 - 不要把原文敏感内容回贴到对话中。
 - redacted 文件与 map 不匹配时**不要强行还原**。
 - 模型未装时如实使用 `--regex-only` 并在报告中说明，不要假装跑了 NER。
+- **NER 是 best-effort，不是安全保证。** 启用 NER 时报告"regex+ner (best-effort)"，注明可能漏公司名/地址，不得宣称 NER 覆盖完整。
 
 ## 故障排查
 

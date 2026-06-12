@@ -32,6 +32,16 @@ Before running any command, determine the file extension:
 
 The CLI supports two detection engines: **regex** (always available) and **NER** (requires local ONNX model).
 
+**Default mode: `--regex-only` is the reliable core.** Structured PII (phone, ID card, email, case number, social credit code, monetary amount) is handled deterministically by regex rules. No model is needed or downloaded.
+
+**NER is optional best-effort.** When enabled, NER may detect person names, locations, organizations, and time expressions. However, NER results are **not a desensitization safety guarantee**:
+
+- May miss company names (e.g., "某某科技有限公司")
+- May miss address tail segments (e.g., door numbers)
+- No MONEY entity (relies on regex)
+- General-domain models, not trained on legal text
+- Audit will mark NER runs with `best_effort` notice
+
 **You must follow this flow—do not skip steps or pretend NER ran:**
 
 1. Run `legal-desens ner-inspect` to check if the NER model is available.
@@ -52,13 +62,21 @@ legal-desens redact input.txt --level strict --regex-only --out ... --map ... --
 
 **Never** omit `--regex-only` when NER has not been verified. The CLI will error clearly if you try to use NER without a valid model, but the agent must not reach that state.
 
-For a fresh workstation where the desktop app model is available, prepare the CLI and model together:
+For a fresh workstation, prefer installing the CLI and NER model from a GitHub Release Asset:
 
 ```bash
+LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
-This runs `pip install`, `legal-desens install-model --from-app`, and `legal-desens ner-inspect`. If the model is unavailable, report that clearly and use `--regex-only`.
+This runs `pip install`, `legal-desens install-model --url ... --sha256 ...`, and `legal-desens ner-inspect`. If the model is unavailable or the hash is missing, report that clearly and use `--regex-only`.
+
+Legacy/import-only mode remains available for users who already have an authorized local compatible model:
+
+```bash
+LEGAL_DESENS_MODEL_SRC=/path/to/model_dir bash scripts/install_with_model.sh
+```
 
 ## Output Triple
 
@@ -169,6 +187,7 @@ legal-desens parse <input.pdf> \
 3. **Default to `--regex-only`.** Only enable NER after `ner-inspect` succeeds.
 4. **Never fake NER.** If you did not run `ner-inspect` or it failed, you must use `--regex-only` and report `regex-only` in the audit.
 5. **Do not force restore on mismatch.** If `redacted_sha256` in the map does not match the input file, restore will fail by design. Do not attempt workarounds.
+6. **NER is best-effort, not a safety guarantee.** When NER is enabled, report "regex+ner (best-effort)" and note that company names and address fragments may be missed. Never claim NER coverage is complete.
 
 ## Per-Format Notes
 
