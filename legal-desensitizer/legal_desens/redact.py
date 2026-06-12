@@ -25,7 +25,14 @@ def _label_prefix_for(entity_type: str, rules: List[Rule]) -> str:
     for r in rules:
         if r.entity_type == entity_type:
             return r.label_prefix
-    return entity_type
+    return {
+        "PER": "人物",
+        "PERSON": "人物",
+        "LOC": "地点",
+        "LOCATION": "地点",
+        "ORG": "机构",
+        "MONEY": "金额",
+    }.get(entity_type, entity_type)
 
 
 class LabelAllocator:
@@ -191,6 +198,14 @@ def redact(
             "text_preview": d.text[:20],
             "engine": d.engine,
         })
+    if mode != "regex-only":
+        warnings.append({
+            "type": "best_effort_notice",
+            "message": (
+                "NER is an optional best-effort enhancement, not a safety guarantee. "
+                "Company names, address fragments, and model-specific entity types may be missed."
+            ),
+        })
     # Include NER decode warnings (e.g. illegal_transition)
     warnings.extend(ner_warnings)
 
@@ -219,5 +234,7 @@ def redact(
         },
         "warnings": warnings,
     }
+    if mode != "regex-only":
+        audit_data["best_effort"] = True
 
     return redacted_text, map_data, audit_data

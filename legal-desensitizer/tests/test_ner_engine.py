@@ -17,6 +17,7 @@ from legal_desens.engine.ner import (
     NEREngine,
     _resolve_model_dir,
     _check_model_dir,
+    _build_tokenizer,
     _load_labels,
     _detect_tag_scheme,
     is_model_available,
@@ -49,17 +50,17 @@ def rules():
 class TestModelDirResolution:
     def test_explicit_dir(self):
         d = _resolve_model_dir("/some/path")
-        assert str(d) == "/some/path"
+        assert str(d) == os.path.normpath("/some/path")
 
     def test_env_var(self, monkeypatch):
         monkeypatch.setenv("LEGAL_DESENS_MODEL_DIR", "/env/path")
         d = _resolve_model_dir(None)
-        assert str(d) == "/env/path"
+        assert str(d) == os.path.normpath("/env/path")
 
     def test_default_dir(self, monkeypatch):
         monkeypatch.delenv("LEGAL_DESENS_MODEL_DIR", raising=False)
         d = _resolve_model_dir(None)
-        assert str(d) == "/Applications/Desensitization/ydner_onnx"
+        assert str(d) == os.path.normpath("/Applications/Desensitization/ydner_onnx")
 
 
 # ── 2. Model directory validation ────────────────────────────────────────────
@@ -118,7 +119,75 @@ class TestErrorPaths:
             inspect_ner("/nonexistent")
 
 
-# ── 5. Tag scheme detection ──────────────────────────────────────────────────
+# ── 5. Tokenizer ─────────────────────────────────────────────────────────────
+
+class TestTokenizer:
+    """Regression tests for BertNormalizer(handle_chinese_chars=True) fix.
+
+    Without this fix, consecutive Chinese chars are treated as one 'word' and
+    tokenized via WordPiece with ## prefixes (e.g. 张/##三/##向), producing
+    wrong token ids → model outputs all O. The fix must be locked.
+    """
+
+    def _build_vocab(self, tmp_path, extra_chars=None):
+        chars = ["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]",
+                 "张", "三", "向", "北", "京", "法", "院", "有", "限", "公",
+                 "司", "科", "技", "人", "民", "币", "壹", "佰", "万", "元"]
+        if extra_chars:
+            chars.extend(extra_chars)
+        vocab = tmp_path / "vocab.txt"
+        vocab.write_text("\n".join(chars), encoding="utf-8")
+        return vocab
+
+    def test_chinese_chars_are_split_as_independent_tokens(self, tmp_path):
+        vocab = self._build_vocab(tmp_path)
+        tokenizer = _build_tokenizer(vocab)
+        encoded = tokenizer.encode("张三向北京")
+
+        assert encoded.tokens == ["[CLS]", "张", "三", "向", "北", "京", "[SEP]"]
+        assert not any(token.startswith("##") for token in encoded.tokens)
+
+    def test_no_hash_prefix_on_any_chinese_char(self, tmp_path):
+        """No token should have ## prefix when handle_chinese_chars is on."""
+        vocab = self._build_vocab(tmp_path)
+        tokenizer = _build_tokenizer(vocab)
+        encoded = tokenizer.encode("人民法院科技有限公司")
+
+        content_tokens = [t for t in encoded.tokens if t not in ("[CLS]", "[SEP]", "[PAD]")]
+        assert not any(t.startswith("##") for t in content_tokens), (
+            f"Found ##-prefixed tokens: {[t for t in content_tokens if t.startswith('##')]}"
+        )
+
+    def test_chinese_mixed_with_ascii(self, tmp_path):
+        """Chinese chars split individually; ASCII words tokenized normally."""
+        vocab = self._build_vocab(tmp_path, extra_chars=["test", "abc"])
+        tokenizer = _build_tokenizer(vocab)
+        encoded = tokenizer.encode("张三test北")
+
+        # Chinese chars are single tokens; 'test' stays as one token
+        assert encoded.tokens == ["[CLS]", "张", "三", "test", "北", "[SEP]"]
+
+    def test_token_ids_are_correct_for_chinese(self, tmp_path):
+        """Token ids must correspond to the actual single-char tokens, not ##-prefixed ones."""
+        vocab = self._build_vocab(tmp_path)
+        tokenizer = _build_tokenizer(vocab)
+
+        encoded = tokenizer.encode("张三")
+
+        # token_to_id for single chars should be non-None and non-UNK
+        unk_id = tokenizer.token_to_id("[UNK]")
+        zhang_id = tokenizer.token_to_id("张")
+        san_id = tokenizer.token_to_id("三")
+
+        assert zhang_id is not None and zhang_id != unk_id
+        assert san_id is not None and san_id != unk_id
+
+        # Content token ids (excluding CLS/SEP) should match single-char ids
+        content_ids = encoded.ids[1:-1]  # strip [CLS] and [SEP]
+        assert content_ids == [zhang_id, san_id]
+
+
+# ── 6. Tag scheme detection ──────────────────────────────────────────────────
 
 class TestTagSchemeDetection:
     def test_bio(self):
@@ -130,7 +199,7 @@ class TestTagSchemeDetection:
         assert _detect_tag_scheme(id2label) == TAG_SCHEME_BIOES
 
 
-# ── 6. Offset assertion tests (model required) ──────────────────────────────
+# ── 7. Offset assertion tests (model required) ──────────────────────────────
 
 @skip_no_model
 class TestNEROffsetAlignment:
@@ -312,7 +381,7 @@ class TestNERCLI:
         assert ret == 0
         assert os.path.exists(out_file)
         assert os.path.exists(map_file)
-        with open(map_file) as f:
+        with open(map_file, encoding="utf-8") as f:
             data = json.load(f)
         assert data["mode"] == "regex+ner"
 
