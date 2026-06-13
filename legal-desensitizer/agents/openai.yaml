@@ -1,0 +1,7 @@
+interface:
+  display_name: "Legal Desensitizer"
+  short_description: "通用案件材料脱敏与审计"
+  default_prompt: "Use $legal-desensitizer to desensitize a folder of Chinese case materials and produce final Markdown plus a local sensitive report."
+
+policy:
+  allow_implicit_invocation: true

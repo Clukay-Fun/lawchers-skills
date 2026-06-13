@@ -22,6 +22,8 @@ adapter_hidden = collect_submodules('legal_desens.adapters')
 # without --rules flag.  It lands at the root of _MEIPASS.
 datas = [
     ('legal_desens/rules/rules.json', '.'),
+    ('legal_desens/profiles/labor.json', 'profiles'),
+    ('legal_desens/profiles/strict.json', 'profiles'),
 ]
 datas += onnxrt_datas
 datas += lxml_datas

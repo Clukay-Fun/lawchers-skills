@@ -44,15 +44,18 @@ Read `/Users/clukay/Program/lawchers-skills/docs/HANDOFF.md` before implementati
 ## Agent Decision Flow
 
 1. Detect file extension → pick row from decision table in SKILL.md.
-2. For any redact: run `ner-inspect` first to decide `--regex-only`.
-3. Always pass `--out`, `--map`, `--audit` to `redact`.
-4. For restore: verify `redacted_sha256` match (CLI does this, but agent should not force restore if mismatched).
-5. For scan (images/scanned docs): use `redact-scan` — map is irreversible, no restore possible.
-6. Report: state mode (regex-only or regex+ner), entity counts, verification result.
+2. On a fresh machine: if `legal-desens ner-inspect` fails or `self_test.passed=false`, run `bash scripts/install_with_model.sh` from the skill/project root before falling back.
+3. For any redact: run `ner-inspect` first; use regex+ner only when `self_test.passed=true`, otherwise explicitly pass `--regex-only`.
+4. Always pass `--out`, `--map`, `--audit` to `redact`.
+5. For restore: verify `redacted_sha256` match (CLI does this, but agent should not force restore if mismatched).
+6. For scan images: use `redact-scan` — map is irreversible, no restore possible. Convert scanned PDFs to images first; do not pass PDF directly.
+7. For case folders: prefer `batch-redact-case`; successful default output keeps final Markdown, sensitive report, and no-PII manifest while deleting `_work_sensitive_do_not_upload/`.
+8. Report: state mode (regex-only or regex+ner), entity counts, verification result.
 
 ## Scan Pipeline (009) Notes
 
 - `redact-scan` produces **irreversible** derivatives — `restore_supported: false`, `best_effort: true`.
+- Direct PDF input is not supported in the commercial-safe core. Convert scanned PDF pages to images before OCR.
 - OCR may miss/misrecognize characters — this is expected. The `best_effort` flag in map/audit documents this.
 - Low-confidence OCR lines (< 0.7) appear as warnings in audit.
 - Map schema: `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`.

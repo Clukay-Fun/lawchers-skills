@@ -48,6 +48,7 @@ _REPORT_FILENAME = "SENSITIVE_REDACTION_REPORT_DO_NOT_UPLOAD.md"
 _SOURCE_INDEX_FILENAME = "SENSITIVE_SOURCE_INDEX_DO_NOT_UPLOAD.json"
 _MANIFEST_FILENAME = "run_manifest.json"
 _ARCHIVE_DIR = "_archive_sensitive_do_not_upload"
+_WORK_DIR = "_work_sensitive_do_not_upload"
 _FINAL_DIR = "final_redacted_md"
 _STAGING_FINAL_DIR = "_staging_final_redacted_md"
 
@@ -156,6 +157,14 @@ def _precheck_ner(model_dir: Optional[str] = None) -> dict:
         raise BatchError(
             f"NER model inspection failed: {e}. "
             "batch-redact-case requires NER. Install or configure the model first."
+        )
+    self_test = info.get("self_test", {})
+    if self_test and not self_test.get("passed", False):
+        raise BatchError(
+            "NER model self-test failed: model loaded but produced no spans on "
+            "a synthetic Chinese person/location/organization probe. "
+            f"Details: {self_test}. Use --regex-only only if you intentionally "
+            "want regex-only redaction."
         )
     return info
 
@@ -560,7 +569,7 @@ def _sanitize_model_info(ner_info: dict) -> dict:
         return {}
 
     safe = {}
-    for key in ("tag_scheme", "num_labels", "id2label", "label_source", "model_io"):
+    for key in ("tag_scheme", "num_labels", "id2label", "label_source", "model_io", "self_test", "mode", "ner"):
         if key in ner_info:
             safe[key] = ner_info[key]
     return safe
@@ -573,6 +582,7 @@ def _write_manifest(
     allowlist_count: int,
     denylist_count: int,
     ner_info: dict,
+    write_source_index: bool = True,
 ) -> Tuple[Path, Path]:
     """Write run_manifest.json (no PII) and SENSITIVE_SOURCE_INDEX_DO_NOT_UPLOAD.json."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -618,8 +628,9 @@ def _write_manifest(
         json.dump(manifest, f, ensure_ascii=False, indent=2)
 
     index_path = out_dir / _SOURCE_INDEX_FILENAME
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(source_index, f, ensure_ascii=False, indent=2)
+    if write_source_index:
+        with open(index_path, "w", encoding="utf-8") as f:
+            json.dump(source_index, f, ensure_ascii=False, indent=2)
 
     return manifest_path, index_path
 
@@ -632,6 +643,7 @@ def _do_cleanup(
     cleanup: str,
     confirm_delete: bool,
     intermediate_files: List[Path],
+    work_dir: Optional[Path] = None,
 ) -> None:
     """Execute cleanup strategy.
 
@@ -645,26 +657,35 @@ def _do_cleanup(
     if cleanup == "archive":
         archive_dir = out_dir / _ARCHIVE_DIR
         archive_dir.mkdir(parents=True, exist_ok=True)
-        for f in intermediate_files:
-            if f.exists():
-                dest = archive_dir / f.name
-                shutil.move(str(f), str(dest))
+        if work_dir and work_dir.exists():
+            dest = archive_dir / work_dir.name
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.move(str(work_dir), str(dest))
+        else:
+            for f in intermediate_files:
+                if f.exists():
+                    dest = archive_dir / f.name
+                    shutil.move(str(f), str(dest))
         return
 
     if cleanup == "delete":
-        if not confirm_delete:
+        if not confirm_delete and work_dir is None:
             raise BatchError(
                 "--cleanup delete requires --confirm-delete flag. "
                 "This operation permanently discards restore capability."
             )
-        print(
-            "WARNING: --cleanup delete will permanently discard map files and "
-            "restore capability. This cannot be undone.",
-            file=sys.stderr,
-        )
-        for f in intermediate_files:
-            if f.exists():
-                f.unlink()
+        if work_dir and work_dir.exists():
+            shutil.rmtree(work_dir)
+        else:
+            print(
+                "WARNING: --cleanup delete will permanently discard map files and "
+                "restore capability. This cannot be undone.",
+                file=sys.stderr,
+            )
+            for f in intermediate_files:
+                if f.exists():
+                    f.unlink()
         return
 
     raise BatchError(f"Unknown cleanup mode: {cleanup}")
@@ -680,7 +701,7 @@ def batch_redact_case(
     allowlist_file: Optional[str] = None,
     denylist_file: Optional[str] = None,
     entity_policy_file: Optional[str] = None,
-    cleanup: str = "none",
+    cleanup: str = "delete",
     confirm_delete: bool = False,
     model_dir: Optional[str] = None,
     rules_path: Optional[str] = None,
@@ -738,14 +759,16 @@ def batch_redact_case(
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     final_dir = out_path / _FINAL_DIR
-    staging_final_dir = out_path / _STAGING_FINAL_DIR
+    work_dir = out_path / _WORK_DIR
+    staging_final_dir = work_dir / _STAGING_FINAL_DIR
     if final_dir.exists():
         raise BatchError(
             f"Final output directory already exists: {final_dir}. "
             "Use a fresh --out directory or move the existing final output first."
         )
-    if staging_final_dir.exists():
-        shutil.rmtree(staging_final_dir)
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
     staging_final_dir.mkdir(parents=True, exist_ok=True)
 
     results: List[dict] = []
@@ -772,8 +795,8 @@ def batch_redact_case(
         final_path.write_text(result["redacted_text"], encoding="utf-8")
 
         # Write map and audit (intermediate, may be cleaned up)
-        map_path = out_path / f"{doc_id}.map.json"
-        audit_path = out_path / f"{doc_id}.audit.json"
+        map_path = work_dir / f"{doc_id}.map.json"
+        audit_path = work_dir / f"{doc_id}.audit.json"
 
         if result["map_data"]:
             with open(map_path, "w", encoding="utf-8") as f:
@@ -809,13 +832,13 @@ def batch_redact_case(
             gate_passed=False, gate_failures=gate_failures,
         )
         print(
-            "GATE FAILED. Staged output preserved for debugging; final output was not created.",
+            "GATE FAILED. Work directory preserved for debugging; final output was not created.",
             file=sys.stderr,
         )
         for f in gate_failures:
             print(f"  FAIL: {f}", file=sys.stderr)
         # Write manifest even on failure (for debugging)
-        _write_manifest(results, out_path, profile_name, len(allowlist), len(denylist), ner_info)
+        _write_manifest(results, work_dir, profile_name, len(allowlist), len(denylist), ner_info)
         return 1
 
     print("  Gate passed.", file=sys.stderr)
@@ -823,13 +846,32 @@ def batch_redact_case(
     staging_final_dir.rename(final_dir)
     print(f"  Final output published to {final_dir}", file=sys.stderr)
 
+    if cleanup in ("none", "archive"):
+        _write_manifest(
+            results,
+            work_dir,
+            profile_name,
+            len(allowlist),
+            len(denylist),
+            ner_info,
+            write_source_index=True,
+        )
+
     # ── Step 7: Cleanup (only if gate passed) ──
     print(f"[7/8] Cleanup: {cleanup}", file=sys.stderr)
-    _do_cleanup(out_path, cleanup, confirm_delete, intermediate_files)
+    _do_cleanup(out_path, cleanup, confirm_delete, intermediate_files, work_dir=work_dir)
 
     # ── Step 8: Manifest ──
     print("[8/8] Writing manifest...", file=sys.stderr)
-    _write_manifest(results, out_path, profile_name, len(allowlist), len(denylist), ner_info)
+    _write_manifest(
+        results,
+        out_path,
+        profile_name,
+        len(allowlist),
+        len(denylist),
+        ner_info,
+        write_source_index=False,
+    )
 
     print("Done.", file=sys.stderr)
     return 0

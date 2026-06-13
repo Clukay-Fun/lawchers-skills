@@ -28,6 +28,7 @@ MAX_MODEL_TOKENS = 512
 SPECIAL_TOKEN_COUNT = 2
 MAX_CONTENT_TOKENS = MAX_MODEL_TOKENS - SPECIAL_TOKEN_COUNT
 CHUNK_OVERLAP_TOKENS = 64
+SELF_TEST_TEXT = "张三在北京市海源科技有限公司工作。"
 
 
 def _resolve_model_dir(model_dir: Optional[str] = None) -> Path:
@@ -586,6 +587,25 @@ def inspect_ner(model_dir: Optional[str] = None) -> dict:
     model_path = d / "model.onnx"
     model_io = inspect_model(model_path)
 
+    self_test = {
+        "text": SELF_TEST_TEXT,
+        "passed": False,
+        "span_count": 0,
+        "entity_types": [],
+        "error": None,
+    }
+    try:
+        engine = NEREngine(str(d))
+        spans, warnings = engine.scan(SELF_TEST_TEXT)
+        self_test.update({
+            "passed": len(spans) > 0,
+            "span_count": len(spans),
+            "entity_types": sorted({span.entity_type for span in spans}),
+            "warnings": warnings,
+        })
+    except Exception as e:
+        self_test["error"] = str(e)
+
     return {
         "model_dir": str(d),
         "model_io": {
@@ -600,4 +620,5 @@ def inspect_ner(model_dir: Optional[str] = None) -> dict:
         "id2label": {str(k): v for k, v in id2label.items()},
         "tag_scheme": tag_scheme,
         "num_labels": len(id2label),
+        "self_test": self_test,
     }

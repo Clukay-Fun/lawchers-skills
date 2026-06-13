@@ -13,14 +13,37 @@
 ## 给 AI 代理：按此顺序执行
 
 ```text
-1. 安装          pip install .
-2. 自测          pytest            # 全绿再继续
-3. 判定 NER 可用  legal-desens ner-inspect   # 成功才用 NER，否则 --regex-only
-4. 脱敏真实文档    legal-desens redact <file> ...
-5. 汇报          模式(regex-only/regex+ner) + 实体数 + 审计/残留扫描结果
+1. 安装          bash scripts/install_with_model.sh
+2. 自测          python3 -m legal_desens.cli ner-inspect   # 必须看到 self_test.passed=true
+3. 批量脱敏       legal-desens batch-redact-case --input <材料目录> --out <输出目录> --profile labor
+4. 查看输出       final_redacted_md/ + SENSITIVE_REDACTION_REPORT_DO_NOT_UPLOAD.md + run_manifest.json
+5. 汇报          模式(regex-only/regex+ner) + 实体数 + 审计/残留扫描结果；不要回贴原文敏感内容
 ```
 
 调用规范与安全边界见 `SKILL.md`、`AGENTS.md`、`CLAUDE.md`，使用前必读。
+
+---
+
+## 可直接发给 Agent 的安装提示词
+
+```text
+你负责安装并验证 legal-desensitizer skill。进入项目目录后不要只执行 pip install，也不要在 ner-inspect 失败后直接放弃。请按顺序执行：
+
+1. cd /Users/clukay/Program/lawchers-skills/legal-desensitizer
+2. bash scripts/install_with_model.sh
+   - 该脚本已内置 GitHub Release NER 模型包 URL 和 SHA-256
+   - 会安装 CLI、下载模型、校验 SHA-256、安装模型并运行 ner-inspect
+3. 如果 legal-desens 不在 PATH，使用 python3 -m legal_desens.cli 等价调用
+4. 执行 python3 -m legal_desens.cli ner-inspect，确认输出里 self_test.passed=true
+5. 执行 python3 -m pytest tests/test_ner_engine.py tests/test_batch_redact_case.py -q
+6. 汇报安装路径、ner-inspect 的 self_test 结果、测试结果；不要粘贴真实案件原文或 map 内容
+
+如果下载慢，优先使用：
+LEGAL_DESENS_WHEELHOUSE=dist/wheelhouse-macos-arm64 bash scripts/install_with_model.sh
+
+如果用户明确只要 regex-only，才允许：
+LEGAL_DESENS_SKIP_MODEL=1 bash scripts/install_with_model.sh
+```
 
 ---
 
@@ -39,8 +62,6 @@ legal-desens ner-inspect
 
 ```bash
 cd legal-desensitizer
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
@@ -69,6 +90,12 @@ pip install .            # 或 pip install -e ".[dev]" 做开发
 legal-desens --help
 ```
 
+如果用户级安装后命令目录不在 `PATH`，等价使用：
+
+```bash
+python3 -m legal_desens.cli --help
+```
+
 ### 安装并准备 NER 模型（一条命令）
 
 > 默认 `--regex-only` 无需模型即可使用。若要启用 NER，推荐从本仓库 GitHub Release Asset 下载已经导出的 ONNX 模型包，并用 SHA-256 校验安装。
@@ -77,8 +104,6 @@ legal-desens --help
 
 ```bash
 cd legal-desensitizer
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
@@ -93,7 +118,10 @@ legal-desens ner-inspect
 常用环境变量：
 
 ```bash
-# 从 GitHub Release Asset 下载模型（推荐）
+# 从内置 GitHub Release Asset 下载模型（推荐）
+bash scripts/install_with_model.sh
+
+# 覆盖模型下载地址（仅在换 release asset 时使用）
 LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
 LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
@@ -101,12 +129,25 @@ bash scripts/install_with_model.sh
 # legacy/import-only：已有本地兼容模型目录时导入
 LEGAL_DESENS_MODEL_SRC=/path/to/ydner_onnx bash scripts/install_with_model.sh
 
-# 只安装 CLI，不安装模型
+# 只安装 CLI，不安装模型（regex-only）
 LEGAL_DESENS_SKIP_MODEL=1 bash scripts/install_with_model.sh
 
 # 强制重装模型
 LEGAL_DESENS_FORCE_MODEL=1 bash scripts/install_with_model.sh
+
+# 使用本地 wheelhouse 加速/离线安装
+LEGAL_DESENS_WHEELHOUSE=dist/wheelhouse-macos-arm64 bash scripts/install_with_model.sh
 ```
+
+### 安装速度建议
+
+优先级从快到慢：
+
+1. **单可执行文件**：最快，用户无需 Python 和 pip；适合最终交付。
+2. **wheelhouse 离线安装**：快且可审计；适合同平台批量部署。
+3. **普通 `pip install .`**：最灵活；开发/调试用。
+
+不要把 360MB NER 模型塞进 wheel 或二进制。模型用 `legal-desens install-model --url ... --sha256 ...` 单独安装，便于更新、校验和替换。
 
 ### 离线 / 免编译安装（两种分发物）
 
@@ -365,9 +406,9 @@ legal-desens restore 合同.redacted.docx --map 合同.map.json --out 合同.res
 
 ## 故障排查
 
-- `legal-desens: command not found` → 确认已 `pip install .` 且 venv 已激活。
+- `legal-desens: command not found` → 使用 `python3 -m legal_desens.cli ...`，或确认用户级脚本目录在 `PATH`。
 - 编辑模式安装报错（旧 pip）→ 先 `pip install --upgrade pip`。
-- `ner-inspect` 报找不到模型 → 先 `install-model --from-app`，或用 `--model-dir` 指定。
+- `ner-inspect` 报找不到模型或 `self_test.passed=false` → 先运行 `bash scripts/install_with_model.sh`，它会从 GitHub Release 下载并校验模型。
 - 非 `--regex-only` 报模型错误 → 这是预期的"不静默降级"，装好模型或显式加 `--regex-only`。
 
 ## 规则

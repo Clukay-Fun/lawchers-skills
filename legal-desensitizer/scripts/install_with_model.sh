@@ -13,6 +13,8 @@
 #   LEGAL_DESENS_MODEL_SHA256    Required when LEGAL_DESENS_MODEL_URL is set.
 #   LEGAL_DESENS_MODEL_SRC       Source ydner_onnx directory. Defaults to app path.
 #   LEGAL_DESENS_MODEL_TARGET    Target model directory.
+#   LEGAL_DESENS_WHEELHOUSE      Optional offline wheelhouse directory.
+#   LEGAL_DESENS_PIP_EXTRA_ARGS  Extra pip args, e.g. "-i https://pypi.tuna.tsinghua.edu.cn/simple".
 #   LEGAL_DESENS_SKIP_MODEL=1    Install CLI only, skip model install.
 #   LEGAL_DESENS_FORCE_MODEL=1   Reinstall model even if manifest matches.
 
@@ -22,10 +24,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 INSTALL_TARGET="${LEGAL_DESENS_INSTALL_TARGET:-$PROJECT_DIR}"
-MODEL_URL="${LEGAL_DESENS_MODEL_URL:-}"
-MODEL_SHA256="${LEGAL_DESENS_MODEL_SHA256:-}"
+DEFAULT_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip"
+DEFAULT_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703"
+MODEL_URL="${LEGAL_DESENS_MODEL_URL:-$DEFAULT_MODEL_URL}"
+MODEL_SHA256="${LEGAL_DESENS_MODEL_SHA256:-$DEFAULT_MODEL_SHA256}"
 MODEL_SRC="${LEGAL_DESENS_MODEL_SRC:-/Applications/Desensitization/ydner_onnx}"
 MODEL_TARGET="${LEGAL_DESENS_MODEL_TARGET:-}"
+WHEELHOUSE="${LEGAL_DESENS_WHEELHOUSE:-}"
+PIP_EXTRA_ARGS="${LEGAL_DESENS_PIP_EXTRA_ARGS:-}"
 SKIP_MODEL="${LEGAL_DESENS_SKIP_MODEL:-0}"
 FORCE_MODEL="${LEGAL_DESENS_FORCE_MODEL:-0}"
 
@@ -34,17 +40,26 @@ if [ "$SKIP_MODEL" != "1" ] && [ -n "$MODEL_URL" ] && [ -z "$MODEL_SHA256" ]; th
     exit 1
 fi
 
-PIP="pip3"
-if ! command -v pip3 >/dev/null 2>&1 && command -v pip >/dev/null 2>&1; then
-    PIP="pip"
+PYTHON="${LEGAL_DESENS_PYTHON:-python3}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    echo "ERROR: python3 not found. Set LEGAL_DESENS_PYTHON=/path/to/python." >&2
+    exit 1
 fi
 
+PIP=("$PYTHON" -m pip)
+
 echo "==> Installing legal-desens"
-"$PIP" install "$INSTALL_TARGET"
+if [ -n "$WHEELHOUSE" ] && [ -d "$WHEELHOUSE" ]; then
+    echo "    Using local wheelhouse: $WHEELHOUSE"
+    "${PIP[@]}" install --no-index --find-links "$WHEELHOUSE" legal-desens
+else
+    # shellcheck disable=SC2086
+    "${PIP[@]}" install --prefer-binary $PIP_EXTRA_ARGS "$INSTALL_TARGET"
+fi
 
 echo ""
 echo "==> Verifying CLI"
-python3 -m legal_desens.cli --help >/dev/null
+"$PYTHON" -m legal_desens.cli --help >/dev/null
 echo "    legal-desens: OK"
 
 if [ "$SKIP_MODEL" = "1" ]; then
@@ -67,14 +82,14 @@ if [ "$FORCE_MODEL" = "1" ]; then
     INSTALL_ARGS+=(--force)
 fi
 
-python3 -m legal_desens.cli "${INSTALL_ARGS[@]}"
+"$PYTHON" -m legal_desens.cli "${INSTALL_ARGS[@]}"
 
 echo ""
 echo "==> Inspecting NER model"
 if [ -n "$MODEL_TARGET" ]; then
-    python3 -m legal_desens.cli ner-inspect --model-dir "$MODEL_TARGET" >/dev/null
+    "$PYTHON" -m legal_desens.cli ner-inspect --model-dir "$MODEL_TARGET" >/dev/null
 else
-    python3 -m legal_desens.cli ner-inspect >/dev/null
+    "$PYTHON" -m legal_desens.cli ner-inspect >/dev/null
 fi
 echo "    NER model: OK"
 
