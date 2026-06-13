@@ -1,11 +1,23 @@
 ---
 name: legal-desensitizer
-description: Redact, restore, and audit sensitive information in Chinese legal documents using the local legal-desens CLI. Supports .txt/.md/.csv (byte-level), .docx/.xlsx (content-level), images/scanned docs via OCR (irreversible). PDF is not supported in the commercial-safe core. Use when a user asks to desensitize legal documents, generate redaction maps, restore redacted documents, or audit residual sensitive data.
+description: General-purpose Chinese case-material redaction skill (general core + scenario profiles) using the local legal-desens CLI. Redact, restore, and audit sensitive information across .txt/.md/.csv (byte-level), .docx/.xlsx (content-level), images/scanned docs via OCR (irreversible). Scenario profiles control redact-vs-preserve: `labor` (default, validated — preserves timeline/amounts, redacts identity) and `strict` (full redaction); new scenarios (criminal/commercial/family/medical) add a profile without changing the core engine. PDF is not supported in the commercial-safe core. Use when a user asks to desensitize case documents, generate redaction maps, restore redacted documents, or audit residual sensitive data.
 ---
 
 # Legal Desensitizer
 
 Use the local `legal-desens` CLI for legal document redaction, restoration, and audit. The CLI is the sole capability core—this skill instructs agents how to call it correctly.
+
+## Skill Installation Bootstrap
+
+Installing or copying this skill does **not** by itself download the NER model. On a fresh machine, after the skill directory is present, run this bootstrap from the project root to install the CLI and prepare the local model:
+
+```bash
+LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
+bash scripts/install_with_model.sh
+```
+
+This downloads the GitHub Release Asset, verifies SHA-256, installs it into the default model directory, and runs `legal-desens ner-inspect`. If this bootstrap has not been run, agents must use `--regex-only`.
 
 ## Quick Decision Table
 
