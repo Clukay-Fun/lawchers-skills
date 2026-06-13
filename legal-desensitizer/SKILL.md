@@ -187,9 +187,11 @@ legal-desens redact-scan <input.png|input.pdf> \
 - For PDF input: renders each page to image → OCR → redact → per-page Markdown sections
 - Requires: `pip install legal-desens[ocr]` (RapidOCR); for PDF also `pip install legal-desens[pdf]`
 - Output: redacted Markdown + map (irreversible) + audit
+- Always write Chinese Markdown with `--out`; do not use shell redirection such as `>` for final files.
 - Map marks `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`
 - **No restore possible** — this produces derivative copies only
 - Low-confidence OCR lines (< 0.7) appear as warnings in audit
+- Do not create `__pdf_pages/`, `__redacted_pages/`, or similar work folders beside the source file. If an external tool forces such a folder, create it under a temporary/work directory and delete it before reporting completion.
 
 ### Parse (requires `[parse-docling]` extra)
 
@@ -265,7 +267,7 @@ legal-desens parse <input.pdf> \
 - Requires both `[pdf]` and `[ocr]` extras: `pip install legal-desens[pdf,ocr]`.
 - Each page is rendered as a 200 DPI PNG, OCR'd independently, then merged into per-page Markdown sections.
 - Map marks `restore_supported: false`, `best_effort: true` — **not reversible**.
-- Keep only final redacted Markdown and the sensitive report; intermediate OCR/map/audit files belong in a local work directory and should be deleted after success.
+- Keep only final redacted Markdown and the sensitive report. Intermediate page images/OCR files belong in a temporary/work directory and must be deleted before success is reported.
 
 ## Batch Case Redaction
 

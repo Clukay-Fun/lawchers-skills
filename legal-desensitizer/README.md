@@ -386,6 +386,8 @@ legal-desens redact-scan input.pdf --ocr rapidocr \
 
 - **不可逆**：OCR/解析丢失原位置，map 标 `restore_supported:false`、`best_effort:true`，**不支持 restore**。
 - OCR 可能漏字/认错，残留扫描只覆盖识别出来的文本；低置信度行进 audit warning。
+- 中文 Markdown 建议始终使用 `--out` 生成，不要用 shell `>` 重定向；CLI 的无 `--out` stdout 也固定输出 UTF-8。
+- PDF 页图/OCR 中间文件默认写入系统临时目录并在完成后删除，不应在源文件目录留下 `__pdf_pages/`、`__redacted_pages/` 等工作目录。
 - 复杂文档解析可选 `parse`（需 `[parse-docling]` extra，较重，默认不装）。
 
 ---

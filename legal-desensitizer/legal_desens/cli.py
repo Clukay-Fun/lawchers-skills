@@ -7,6 +7,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
+from typing import TextIO
 
 from .audit import audit
 from .io import read_text, write_text
@@ -33,6 +34,18 @@ _C_CONVERT_MSG = (
     "  - .pages/.numbers/.key → .docx/.xlsx/.pptx or PDF/image\n"
     "Then run the command again on the converted file."
 )
+
+
+def _write_stdout_utf8(text: str, stdout: TextIO | None = None) -> None:
+    """Write redirected stdout as UTF-8 on Windows and other legacy locales."""
+    stream = stdout or sys.stdout
+    buffer = getattr(stream, "buffer", None)
+    if buffer is None:
+        stream.write(text)
+        return
+
+    buffer.write(text.encode("utf-8"))
+    buffer.flush()
 
 
 def _detect_format(path: str) -> str:
@@ -178,7 +191,7 @@ def _cmd_redact(args: argparse.Namespace) -> int:
         if args.out:
             write_text(args.out, redacted_text, tf)
         else:
-            sys.stdout.write(redacted_text)
+            _write_stdout_utf8(redacted_text)
 
         if args.map:
             with open(args.map, "w", encoding="utf-8") as f:
@@ -303,7 +316,7 @@ def _cmd_restore(args: argparse.Namespace) -> int:
         if args.out:
             write_text(args.out, restored_text, tf)
         else:
-            sys.stdout.write(restored_text)
+            _write_stdout_utf8(restored_text)
 
         restored_bytes = restored_text.encode("utf-8")
         if tf.has_bom:
@@ -467,7 +480,7 @@ def _cmd_redact_scan(args: argparse.Namespace) -> int:
     if args.out:
         Path(args.out).write_text(redacted_text, encoding="utf-8")
     else:
-        sys.stdout.write(redacted_text)
+        _write_stdout_utf8(redacted_text)
 
     if args.map:
         with open(args.map, "w", encoding="utf-8") as f:
@@ -504,7 +517,7 @@ def _cmd_parse(args: argparse.Namespace) -> int:
         Path(args.out).write_text(md_text, encoding="utf-8")
         print(f"Parsed: {args.out}", file=sys.stderr)
     else:
-        sys.stdout.write(md_text)
+        _write_stdout_utf8(md_text)
 
     if args.meta:
         with open(args.meta, "w", encoding="utf-8") as f:
@@ -573,8 +586,7 @@ def _cmd_audit(args: argparse.Namespace) -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
     else:
-        json.dump(result, sys.stdout, ensure_ascii=False, indent=2)
-        sys.stdout.write("\n")
+        _write_stdout_utf8(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
 
     return 0
 

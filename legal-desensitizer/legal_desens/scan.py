@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +55,27 @@ def _render_pdf_pages(pdf_path: str, dpi: int = 200) -> Tuple[List[str], int]:
     result = render_pdf_pages(pdf_path, dpi=dpi)
     image_paths = [p.image_path for p in result.page_images]
     return image_paths, result.total_pages
+
+
+def _cleanup_pdf_temp_pages(page_image_paths: List[str]) -> None:
+    """Remove PDF render temp files and their generated temp directory."""
+    if not page_image_paths:
+        return
+
+    temp_dir = Path(page_image_paths[0]).parent
+    if temp_dir.name.startswith("legal_desens_pdf_"):
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        return
+
+    for p in page_image_paths:
+        try:
+            Path(p).unlink(missing_ok=True)
+        except OSError:
+            pass
+    try:
+        temp_dir.rmdir()
+    except OSError:
+        pass
 
 
 _COMMON_SINGLE_CHAR_SURNAMES = (
@@ -411,16 +433,4 @@ def _scan_redact_pdf(
         return redacted_text, map_data, audit_data, ocr_meta
 
     finally:
-        # Clean up temporary page images
-        for p in page_image_paths:
-            try:
-                Path(p).unlink(missing_ok=True)
-            except OSError:
-                pass
-        # Try to remove temp directory
-        if page_image_paths:
-            try:
-                temp_dir = Path(page_image_paths[0]).parent
-                temp_dir.rmdir()
-            except OSError:
-                pass
+        _cleanup_pdf_temp_pages(page_image_paths)
