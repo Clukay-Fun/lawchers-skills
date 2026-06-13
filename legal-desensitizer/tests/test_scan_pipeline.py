@@ -295,6 +295,18 @@ class TestCLIScanCommands:
         rc = main(["parse", "dummy.pdf", "--out", "out.md"])
         assert rc == 1
 
+    def test_redact_scan_pdf_direct_input_has_clear_error(self, tmp_path, capsys):
+        """Direct PDF OCR is not supported after PyMuPDF removal; fail clearly."""
+        from legal_desens.cli import main
+
+        pdf = tmp_path / "scan.pdf"
+        pdf.write_bytes(b"%PDF-1.7\n%%EOF\n")
+
+        rc = main(["redact-scan", str(pdf), "--regex-only"])
+
+        assert rc == 1
+        assert "Convert each scanned PDF page to an image first" in capsys.readouterr().err
+
 
 # ── 5. Manual Review Warnings ────────────────────────────────────────────────
 

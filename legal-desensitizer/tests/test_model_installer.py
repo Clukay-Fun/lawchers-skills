@@ -445,6 +445,7 @@ class TestModelDirSearchOrder:
 class TestInstallThenInspect:
     def test_install_then_ner_inspect_without_model_dir(self, synthetic_src, tmp_path, monkeypatch):
         """After install to user-level dir, ner-inspect should find it without --model-dir."""
+        monkeypatch.delenv("LEGAL_DESENS_MODEL_DIR", raising=False)
         target = tmp_path / "models" / "roberta-crf-ner"
         install_from_app(src=synthetic_src, target=target)
 
@@ -525,6 +526,6 @@ class TestCLI:
             "--out", out_file,
         ])
         assert ret == 0
-        with open(out_file) as f:
+        with open(out_file, encoding="utf-8") as f:
             data = json.load(f)
         assert data["source"] == "from-app"

@@ -112,6 +112,13 @@ def scan_redact(
             "Install with: pip install legal-desens[ocr]"
         )
 
+    if Path(image_path).suffix.lower() == ".pdf":
+        raise ValueError(
+            "redact-scan does not accept PDF directly after PyMuPDF removal. "
+            "Convert each scanned PDF page to an image first, then run redact-scan "
+            "on the page images; or use parse for text-layer PDFs."
+        )
+
     source_sha = _source_sha256(image_path)
 
     # Step 1: OCR
