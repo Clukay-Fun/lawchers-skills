@@ -818,8 +818,8 @@ def main(argv=None):
                          help="Path to case-specific denylist file")
     p_batch.add_argument("--entity-policy", default=None,
                          help="Path to entity_policy JSON file")
-    p_batch.add_argument("--cleanup", default="none", choices=["none", "archive", "delete"],
-                         help="Cleanup mode (default: none)")
+    p_batch.add_argument("--cleanup", default="delete", choices=["none", "archive", "delete"],
+                         help="Cleanup mode for sensitive work files (default: delete)")
     p_batch.add_argument("--confirm-delete", action="store_true", default=False,
                          help="Required with --cleanup delete to confirm permanent deletion")
     p_batch.add_argument("--model-dir", default=None,

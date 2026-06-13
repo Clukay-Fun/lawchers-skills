@@ -26,6 +26,7 @@ from legal_desens.batch import (
     _SOURCE_INDEX_FILENAME,
     _MANIFEST_FILENAME,
     _ARCHIVE_DIR,
+    _WORK_DIR,
     _FINAL_DIR,
     _STAGING_FINAL_DIR,
 )
@@ -289,6 +290,21 @@ class TestRunGate:
         assert passed is False
         assert any("preserved label detected" in f for f in failures)
 
+    def test_precheck_fails_when_ner_self_test_outputs_no_spans(self, monkeypatch):
+        import legal_desens.batch as batch_module
+
+        monkeypatch.setattr(batch_module, "inspect_ner", lambda model_dir=None: {
+            "self_test": {
+                "passed": False,
+                "span_count": 0,
+                "entity_types": [],
+                "error": None,
+            }
+        })
+
+        with pytest.raises(BatchError, match="self-test failed"):
+            _precheck_ner(None)
+
 
 # ── 6. Report first line ────────────────────────────────────────────────────
 
@@ -439,12 +455,9 @@ class TestBatchRedactCaseIntegration:
             assert "original_name" not in doc
             assert "source_name" not in doc
 
-        # Source index exists (separate file, has original names)
-        index_path = out_path / _SOURCE_INDEX_FILENAME
-        assert index_path.is_file()
-        index = json.loads(index_path.read_text(encoding="utf-8"))
-        assert "doc_01" in index
-        assert "original_name" in index["doc_01"]
+        # Successful default output keeps only final docs, report, and no-PII manifest.
+        assert not (out_path / _SOURCE_INDEX_FILENAME).exists()
+        assert not (out_path / _WORK_DIR).exists()
 
     def test_gate_failure_no_final_dir_and_no_cleanup(self, tmp_path, monkeypatch):
         """When gate fails, cleanup should NOT run and exit code should be non-zero."""
@@ -469,9 +482,11 @@ class TestBatchRedactCaseIntegration:
 
         out_path = tmp_path / "output"
         assert not (out_path / _FINAL_DIR).exists()
-        assert (out_path / _STAGING_FINAL_DIR / "doc_01.redacted.md").is_file()
-        assert (out_path / "doc_01.map.json").is_file()
-        assert (out_path / "doc_01.audit.json").is_file()
+        work_dir = out_path / _WORK_DIR
+        assert (work_dir / _STAGING_FINAL_DIR / "doc_01.redacted.md").is_file()
+        assert (work_dir / "doc_01.map.json").is_file()
+        assert (work_dir / "doc_01.audit.json").is_file()
+        assert (work_dir / _SOURCE_INDEX_FILENAME).is_file()
         assert not (out_path / _ARCHIVE_DIR).exists()
 
     def test_cleanup_archive(self, tmp_path):
@@ -492,13 +507,13 @@ class TestBatchRedactCaseIntegration:
 
         out_path = tmp_path / "output"
         archive_dir = out_path / _ARCHIVE_DIR
-        assert archive_dir.is_dir()
-        # Map files should be in archive
-        assert (archive_dir / "doc_01.map.json").is_file()
-        assert (archive_dir / "doc_01.audit.json").is_file()
+        archived_work = archive_dir / _WORK_DIR
+        assert archived_work.is_dir()
+        assert (archived_work / "doc_01.map.json").is_file()
+        assert (archived_work / "doc_01.audit.json").is_file()
 
-    def test_cleanup_delete_requires_confirm(self, tmp_path):
-        """--cleanup delete without --confirm-delete should fail."""
+    def test_cleanup_delete_does_not_require_confirm_for_generated_work_dir(self, tmp_path):
+        """--cleanup delete removes only the generated work dir."""
         from legal_desens.batch import batch_redact_case
 
         input_dir = _make_input_dir(tmp_path, {
@@ -506,14 +521,17 @@ class TestBatchRedactCaseIntegration:
         })
         out_dir = str(tmp_path / "output")
 
-        with pytest.raises(BatchError, match="confirm-delete"):
-            batch_redact_case(
-                input_dir=input_dir,
-                out_dir=out_dir,
-                profile_name="labor",
-                cleanup="delete",
-                confirm_delete=False,
-            )
+        rc = batch_redact_case(
+            input_dir=input_dir,
+            out_dir=out_dir,
+            profile_name="labor",
+            cleanup="delete",
+            confirm_delete=False,
+        )
+
+        assert rc == 0
+        assert (tmp_path / "output" / _FINAL_DIR / "doc_01.redacted.md").is_file()
+        assert not (tmp_path / "output" / _WORK_DIR).exists()
 
     def test_cleanup_delete_with_confirm(self, tmp_path):
         """--cleanup delete with --confirm-delete removes map files."""
@@ -533,9 +551,8 @@ class TestBatchRedactCaseIntegration:
         assert rc == 0
 
         out_path = tmp_path / "output"
-        # Map/audit files should be deleted
-        assert not (out_path / "doc_01.map.json").is_file()
-        assert not (out_path / "doc_01.audit.json").is_file()
+        assert not (out_path / _WORK_DIR).exists()
+        assert not (out_path / _SOURCE_INDEX_FILENAME).exists()
         # But final output should remain
         assert (out_path / _FINAL_DIR / "doc_01.redacted.md").is_file()
 
@@ -580,6 +597,7 @@ class TestBatchRedactCaseIntegration:
             input_dir=input_dir,
             out_dir=out_dir,
             profile_name="labor",
+            cleanup="none",
         )
         assert rc == 0
 
@@ -590,9 +608,9 @@ class TestBatchRedactCaseIntegration:
         # Original filename must NOT appear in manifest
         assert "张三_劳动合同" not in manifest_str
 
-        # But source index should have it
+        # But source index should have it when work files are explicitly kept.
         index = json.loads(
-            (tmp_path / "output" / _SOURCE_INDEX_FILENAME).read_text(encoding="utf-8")
+            (tmp_path / "output" / _WORK_DIR / _SOURCE_INDEX_FILENAME).read_text(encoding="utf-8")
         )
         assert "doc_01" in index
         assert index["doc_01"]["original_name"] == "张三_劳动合同.txt"
@@ -705,12 +723,12 @@ class TestMissingOcr:
             )
 
 
-# ── 9. Cleanup default is none ──────────────────────────────────────────────
+# ── 10. Cleanup modes ───────────────────────────────────────────────────────
 
 
-class TestCleanupDefault:
-    def test_default_cleanup_none(self, tmp_path):
-        """Default cleanup should be none — map files remain."""
+class TestCleanupModes:
+    def test_default_cleanup_delete(self, tmp_path):
+        """Default cleanup deletes sensitive work files after a successful run."""
         from legal_desens.batch import batch_redact_case
 
         input_dir = _make_input_dir(tmp_path, {
@@ -721,16 +739,35 @@ class TestCleanupDefault:
             input_dir=input_dir,
             out_dir=out_dir,
             profile_name="labor",
-            # cleanup defaults to "none"
         )
         assert rc == 0
 
         out_path = tmp_path / "output"
-        # Map files should remain
-        assert (out_path / "doc_01.map.json").is_file()
-        assert (out_path / "doc_01.audit.json").is_file()
-        # No archive directory
+        assert (out_path / _FINAL_DIR / "doc_01.redacted.md").is_file()
+        assert (out_path / _REPORT_FILENAME).is_file()
+        assert (out_path / _MANIFEST_FILENAME).is_file()
+        assert not (out_path / _WORK_DIR).exists()
         assert not (out_path / _ARCHIVE_DIR).is_dir()
+
+    def test_cleanup_none_keeps_work_dir(self, tmp_path):
+        """Explicit cleanup=none keeps generated map/audit under the work dir."""
+        from legal_desens.batch import batch_redact_case
+
+        input_dir = _make_input_dir(tmp_path, {
+            "doc1.txt": "张三在某科技有限公司工作。",
+        })
+        out_dir = str(tmp_path / "output")
+        rc = batch_redact_case(
+            input_dir=input_dir,
+            out_dir=out_dir,
+            profile_name="labor",
+            cleanup="none",
+        )
+        assert rc == 0
+
+        work_dir = tmp_path / "output" / _WORK_DIR
+        assert (work_dir / "doc_01.map.json").is_file()
+        assert (work_dir / "doc_01.audit.json").is_file()
 
 
 # Need Path for classify_ext tests

@@ -288,6 +288,8 @@ class TestModelIOInspection:
         assert "id2label" in info
         assert "tag_scheme" in info
         assert info["tag_scheme"] in ("BIO", "BIOES")
+        assert "self_test" in info
+        assert "passed" in info["self_test"]
 
     def test_model_io_recorded(self):
         engine = NEREngine(MODEL_DIR)
