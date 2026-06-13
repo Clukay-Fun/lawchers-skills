@@ -2,6 +2,7 @@
 
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import sys
@@ -25,6 +26,21 @@ requires_rapidocr = pytest.mark.skipif(
 @pytest.fixture
 def rules():
     return load_rules(RULES_PATH)
+
+
+class TestCLIEncoding:
+    def test_write_stdout_utf8_uses_bytes_for_redirected_stream(self):
+        from legal_desens.cli import _write_stdout_utf8
+
+        class FakeStdout:
+            def __init__(self):
+                self.buffer = io.BytesIO()
+
+        fake = FakeStdout()
+
+        _write_stdout_utf8("第 1 页\n【手机号】\n", stdout=fake)
+
+        assert fake.buffer.getvalue() == "第 1 页\n【手机号】\n".encode("utf-8")
 
 
 # ── 1. OCR Engine ────────────────────────────────────────────────────────────

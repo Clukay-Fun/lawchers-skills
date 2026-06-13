@@ -253,6 +253,49 @@ class TestScanPipelinePDF:
         # but we can verify the function completes without error
         # and the test doesn't leave temp files around
 
+    def test_scan_redact_pdf_removes_temp_dir_with_residue(self, rules, tmp_path, monkeypatch):
+        """PDF cleanup removes the generated temp directory even if residue remains."""
+        from legal_desens.engine.ocr import OCRResult
+        import legal_desens.scan as scan_mod
+
+        pdf = tmp_path / "scan.pdf"
+        pdf.write_bytes(b"%PDF-1.7\n%%EOF\n")
+
+        temp_dir = tmp_path / "legal_desens_pdf_case"
+        temp_dir.mkdir()
+        page = temp_dir / "page_0001.png"
+        page.write_bytes(b"fake png")
+        (temp_dir / "leftover.tmp").write_text("residue", encoding="utf-8")
+
+        monkeypatch.setattr(scan_mod, "_check_fitz_available", lambda: None)
+        monkeypatch.setattr(scan_mod, "_render_pdf_pages", lambda path: ([str(page)], 1))
+        monkeypatch.setattr(
+            scan_mod,
+            "run_rapidocr",
+            lambda path, confidence_threshold=0.7: OCRResult(
+                text="电话13800138000。",
+                lines=[],
+                warnings=[],
+            ),
+        )
+        monkeypatch.setattr(
+            scan_mod,
+            "redact",
+            lambda **kwargs: (
+                "电话【手机号】。",
+                {"entities": [], "occurrences": []},
+                {
+                    "summary": {"total_entities": 0, "total_occurrences": 0, "by_entity_type": {}},
+                    "residual_scan": {"passed": True, "findings": []},
+                    "warnings": [],
+                },
+            ),
+        )
+
+        scan_mod.scan_redact(str(pdf), rules)
+
+        assert not temp_dir.exists()
+
 
 # ── 3. CLI PDF Routing ───────────────────────────────────────────────────────
 
