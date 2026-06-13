@@ -249,8 +249,8 @@ class TestDOCXRedactRestore:
         assert map_data["verification"] == "content"
         assert map_data["verification"] != "byte"
 
-    def test_docx_labels_are_document_scoped(self, rules, tmp_path):
-        """Different entities in different paragraphs should not reuse the same label."""
+    def test_docx_entity_ids_are_document_scoped_with_shared_label(self, rules, tmp_path):
+        """Different entities keep distinct IDs even when the display label is shared."""
         from docx import Document
         from legal_desens.adapters.docx_adapter import DOCXAdapter
 
@@ -267,9 +267,9 @@ class TestDOCXRedactRestore:
         map_data, _ = adapter.redact(src, redacted, _txt_redact_fn, rules)
         redacted_text, _ = adapter.extract_text(redacted)
 
-        assert "手机号1" in redacted_text
-        assert "手机号2" in redacted_text
-        assert [e["replacement"] for e in map_data["entities"]] == ["手机号1", "手机号2"]
+        assert redacted_text.count("【手机号】") == 2
+        assert [e["replacement"] for e in map_data["entities"]] == ["【手机号】", "【手机号】"]
+        assert [e["id"] for e in map_data["entities"]] == ["PHONE_1", "PHONE_2"]
 
         adapter.restore(redacted, restored, map_data)
         restored_text, _ = adapter.extract_text(restored)
@@ -460,8 +460,8 @@ class TestXLSXRedactRestore:
 
         assert map_data["verification"] == "content"
 
-    def test_xlsx_labels_are_workbook_scoped(self, rules, tmp_path):
-        """Different entities in different cells should not reuse the same label."""
+    def test_xlsx_entity_ids_are_workbook_scoped_with_shared_label(self, rules, tmp_path):
+        """Different entities keep distinct IDs even when the display label is shared."""
         from openpyxl import Workbook
         from legal_desens.adapters.xlsx_adapter import XLSXAdapter
 
@@ -479,9 +479,9 @@ class TestXLSXRedactRestore:
         map_data, _ = adapter.redact(src, redacted, _txt_redact_fn, rules)
         redacted_text, _ = adapter.extract_text(redacted)
 
-        assert "手机号1" in redacted_text
-        assert "手机号2" in redacted_text
-        assert [e["replacement"] for e in map_data["entities"]] == ["手机号1", "手机号2"]
+        assert redacted_text.count("【手机号】") == 2
+        assert [e["replacement"] for e in map_data["entities"]] == ["【手机号】", "【手机号】"]
+        assert [e["id"] for e in map_data["entities"]] == ["PHONE_1", "PHONE_2"]
 
         adapter.restore(redacted, restored, map_data)
         restored_text, _ = adapter.extract_text(restored)

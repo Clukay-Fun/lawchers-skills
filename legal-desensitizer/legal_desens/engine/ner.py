@@ -24,6 +24,10 @@ USER_MODEL_DIR = Path.home() / ".legal-desens" / "models" / "roberta-crf-ner"
 TAG_O = "O"
 TAG_SCHEME_BIO = "BIO"
 TAG_SCHEME_BIOES = "BIOES"
+MAX_MODEL_TOKENS = 512
+SPECIAL_TOKEN_COUNT = 2
+MAX_CONTENT_TOKENS = MAX_MODEL_TOKENS - SPECIAL_TOKEN_COUNT
+CHUNK_OVERLAP_TOKENS = 64
 
 
 def _resolve_model_dir(model_dir: Optional[str] = None) -> Path:
@@ -388,16 +392,16 @@ class NEREngine:
                 offsets.append(None)
         return encoding, offsets
 
-    def infer(self, text: str) -> Tuple[List[int], List[Tuple[int, int]]]:
-        """Run ONNX inference on text.
-
-        Returns (tag_ids, offsets) where offsets excludes special tokens.
-        """
-        encoding, offsets = self.encode_with_offsets(text)
-
+    def _infer_token_arrays(
+        self,
+        ids: List[int],
+        attention_mask_values: List[int],
+        offsets: List[Optional[Tuple[int, int]]],
+    ) -> Tuple[List[int], List[Tuple[int, int]]]:
+        """Run ONNX inference on one already-bounded token array."""
         # Prepare model inputs
-        input_ids = [encoding.ids]
-        attention_mask = [encoding.attention_mask]
+        input_ids = [ids]
+        attention_mask = [attention_mask_values]
         feed = {
             self._model_io.input_names[0]: np.array(input_ids, dtype=np.int64),
         }
@@ -406,7 +410,7 @@ class NEREngine:
         name_to_data = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "token_type_ids": [[0] * len(encoding.ids)],
+            "token_type_ids": [[0] * len(ids)],
         }
 
         for name in self._model_io.input_names:
@@ -441,6 +445,55 @@ class NEREngine:
                 filtered_offsets.append(off)
 
         return filtered_tag_ids, filtered_offsets
+
+    def _infer_encoding(self, encoding, offsets) -> Tuple[List[int], List[Tuple[int, int]]]:
+        """Run ONNX inference on one already-bounded encoding."""
+        return self._infer_token_arrays(encoding.ids, encoding.attention_mask, offsets)
+
+    def infer(self, text: str) -> Tuple[List[int], List[Tuple[int, int]]]:
+        """Run ONNX inference on text.
+
+        Returns (tag_ids, offsets) where offsets excludes special tokens.
+        Long inputs are processed in overlapping token windows so ONNX models
+        with a 512-token position limit do not fail at runtime.
+        """
+        encoding, offsets = self.encode_with_offsets(text)
+        content_indexes = [i for i, off in enumerate(offsets) if off is not None]
+        if len(encoding.ids) <= MAX_MODEL_TOKENS:
+            return self._infer_encoding(encoding, offsets)
+
+        combined: List[Tuple[Tuple[int, int], int]] = []
+        seen_offsets = set()
+        step = MAX_CONTENT_TOKENS - CHUNK_OVERLAP_TOKENS
+        if step <= 0:
+            step = MAX_CONTENT_TOKENS
+
+        for start in range(0, len(content_indexes), step):
+            chunk_content = content_indexes[start:start + MAX_CONTENT_TOKENS]
+            if not chunk_content:
+                continue
+
+            chunk_ids = (
+                [self._tokenizer.token_to_id("[CLS]")]
+                + [encoding.ids[i] for i in chunk_content]
+                + [self._tokenizer.token_to_id("[SEP]")]
+            )
+            chunk_attention = [1] * len(chunk_ids)
+            chunk_offsets = [None] + [offsets[i] for i in chunk_content] + [None]
+            tag_ids, tag_offsets = self._infer_token_arrays(
+                chunk_ids, chunk_attention, chunk_offsets
+            )
+            for tid, off in zip(tag_ids, tag_offsets):
+                if off in seen_offsets:
+                    continue
+                seen_offsets.add(off)
+                combined.append((off, tid))
+
+            if start + MAX_CONTENT_TOKENS >= len(content_indexes):
+                break
+
+        combined.sort(key=lambda item: item[0][0])
+        return [tid for _, tid in combined], [off for off, _ in combined]
 
     def scan(self, text: str) -> Tuple[List[Span], List[dict]]:
         """Run NER on text and return (spans, warnings).

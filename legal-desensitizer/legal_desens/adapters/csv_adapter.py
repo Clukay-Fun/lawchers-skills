@@ -17,6 +17,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 from ..engine.regex import scan_regex
 from ..engine.merge import merge_spans
 from ..engine.span import Span
+from ..profile import load_profile
 from ..rules import Rule
 
 BOM_UTF8 = b"\xef\xbb\xbf"
@@ -281,6 +282,8 @@ def csv_redact(
     total_entities = 0
     total_occurrences = 0
     all_warnings = []
+    profile = getattr(redact_fn, "_profile", None)
+    profile_name = profile.name if profile else None
 
     for row_idx, row in enumerate(csv_file.rows):
         redacted_row = []
@@ -291,6 +294,8 @@ def csv_redact(
             redacted_row.append(redacted_cell)
 
             if cell_map.get("entities"):
+                if profile_name is None:
+                    profile_name = cell_map.get("profile")
                 cell_maps.append(cell_map)
                 cell_positions.append((row_idx, col_idx))
                 total_entities += len(cell_map.get("entities", []))
@@ -324,6 +329,13 @@ def csv_redact(
     map_data["redacted_file"] = redacted_path
     map_data["source_sha256"] = source_sha
     map_data["redacted_sha256"] = redacted_sha
+    if profile is None and profile_name:
+        try:
+            profile = load_profile(profile_name)
+        except FileNotFoundError:
+            profile = None
+    if profile_name is not None:
+        map_data["profile"] = profile_name
     map_data["byte_metadata"] = {
         "encoding": "utf-8-sig" if csv_file.has_bom else "utf-8",
         "has_bom": csv_file.has_bom,
@@ -350,10 +362,14 @@ def csv_redact(
         csv_file.newline.join(row) for row in redacted_rows
     )
     residual = scan_regex(redacted_text, rules)
+    if profile is not None:
+        redact_types = profile.redact_entity_types()
+        residual = [f for f in residual if f.entity_type in redact_types]
 
     audit_data = {
         "schema_version": "1.1",
         "document_type": "csv",
+        "profile": profile_name,
         "summary": {
             "total_entities": total_entities,
             "total_occurrences": total_occurrences,
@@ -470,6 +486,15 @@ def csv_audit(
         csv_file.newline.join(row) for row in csv_file.rows
     )
     residual = scan_regex(redacted_text, rules)
+    profile_name = map_data.get("profile")
+    if profile_name:
+        try:
+            profile = load_profile(profile_name)
+        except FileNotFoundError:
+            profile = None
+        if profile is not None:
+            redact_types = profile.redact_entity_types()
+            residual = [f for f in residual if f.entity_type in redact_types]
 
     entities = map_data.get("entities", [])
     occurrences = map_data.get("occurrences", [])
@@ -489,6 +514,7 @@ def csv_audit(
     return {
         "schema_version": "1.1",
         "document_type": "csv",
+        "profile": profile_name,
         "summary": {
             "total_entities": len(entities),
             "total_occurrences": len(occurrences),

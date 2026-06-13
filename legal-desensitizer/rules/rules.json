@@ -9,6 +9,15 @@
     "priority": 100
   },
   {
+    "id": "landline_cn",
+    "name": "中国大陆固定电话",
+    "entity_type": "LANDLINE",
+    "label_prefix": "电话",
+    "pattern": "(?<!\\d)(?:0\\d{2,3}[-－—]?\\d{7,8})(?:[-－—]?\\d{1,6})?(?!\\d)",
+    "enabled": true,
+    "priority": 100
+  },
+  {
     "id": "id_card_cn",
     "name": "身份证号",
     "entity_type": "ID_CARD",
@@ -36,6 +45,15 @@
     "priority": 100
   },
   {
+    "id": "case_no_contract",
+    "name": "合同编号/短案号",
+    "entity_type": "CASE_NO",
+    "label_prefix": "案号",
+    "pattern": "(?:(?:合同编号|案号)\\s*)?(?:[\\[【（(]\\s*[0-9０-９oO]{2,4}\\s*[\\]】）)]?\\s*[\\u4e00-\\u9fffA-Za-z0-9０-９oO」\\-－—（）()\\[\\]【】]{2,30}号|(?<![A-Za-z0-9])(?=[0-9A-Za-z]{2,8}[-－—][0-9A-Za-z]{2,12}(?![A-Za-z0-9]))(?=[0-9A-Za-z\\-－—]*[A-Za-z])[0-9A-Za-z]{2,8}[-－—][0-9A-Za-z]{2,12}(?![A-Za-z0-9]))",
+    "enabled": true,
+    "priority": 100
+  },
+  {
     "id": "org_code",
     "name": "统一社会信用代码",
     "entity_type": "ORG_CODE",
@@ -43,6 +61,24 @@
     "pattern": "(?<!\\d)[0-9A-HJ-NP-RTUW-Y]{2}\\d{6}[0-9A-HJ-NP-RTUW-Y]{10}(?!\\d)",
     "enabled": true,
     "priority": 100
+  },
+  {
+    "id": "bank_account_cn",
+    "name": "银行账号",
+    "entity_type": "BANK_ACCOUNT",
+    "label_prefix": "银行账号",
+    "pattern": "(?<!\\d)\\d{12,19}(?!\\d)",
+    "enabled": false,
+    "priority": 80
+  },
+  {
+    "id": "bank_branch_cn",
+    "name": "银行开户行/网点",
+    "entity_type": "BANK_BRANCH",
+    "label_prefix": "银行信息",
+    "pattern": "(?:开户行\\s*[:：]?\\s*)?[\\u4e00-\\u9fff]{2,30}(?:银行|信用社)[\\u4e00-\\u9fff]{0,30}(?:支行|分行|营业部)",
+    "enabled": true,
+    "priority": 80
   },
   {
     "id": "money_cn",

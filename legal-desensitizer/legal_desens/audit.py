@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-from typing import List
+from typing import List, Optional
 
 from .engine.regex import scan_regex
+from .profile import Profile
 from .rules import Rule
 
 
@@ -13,18 +14,24 @@ def audit(
     redacted_text: str,
     map_data: dict,
     rules: List[Rule],
+    profile: Optional[Profile] = None,
 ) -> dict:
     """Audit a redacted text against its map and current rules.
 
     Performs:
-    - Residual scan: check if redacted text still contains sensitive patterns
+    - Profile-aware residual scan: only checks entity_types the profile marks for redact
     - Map structure validation
     - Map/file SHA-256 consistency check
     """
     warnings: List[str] = []
 
-    # Residual scan
-    residual = scan_regex(redacted_text, rules)
+    # Residual scan — profile-aware
+    all_residual = scan_regex(redacted_text, rules)
+    if profile is not None:
+        redact_types = profile.redact_entity_types()
+        residual = [f for f in all_residual if f.entity_type in redact_types]
+    else:
+        residual = all_residual
 
     # Validate map structure
     if "entities" not in map_data:
@@ -63,6 +70,7 @@ def audit(
 
     return {
         "schema_version": "1.0",
+        "profile": profile.name if profile else None,
         "summary": {
             "total_entities": len(entities),
             "total_occurrences": len(occurrences),

@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from lxml import etree
 
 from . import AuditWarning, DocumentAdapter
+from ..profile import load_profile
 
 # python-docx namespace map
 NSMAP = {
@@ -92,6 +93,9 @@ def _label_prefix_for(entity_type: str, rules) -> str:
         "LOC": "地点",
         "LOCATION": "地点",
         "ORG": "机构",
+        "LANDLINE": "电话",
+        "BANK_ACCOUNT": "银行账号",
+        "BANK_BRANCH": "银行信息",
         "MONEY": "金额",
     }.get(entity_type, entity_type)
 
@@ -276,6 +280,7 @@ class DOCXAdapter(DocumentAdapter):
         all_warnings: List[dict] = []
         entity_set = {}  # (entity_type, original) -> doc_ent_id
         entity_counters: Dict[str, int] = {}
+        profile_name = getattr(redact_fn, "_profile_name", None)
 
         def get_doc_entity(ent: dict, engine: str) -> Tuple[str, str]:
             ent_key = (ent["entity_type"], ent["original"])
@@ -284,7 +289,7 @@ class DOCXAdapter(DocumentAdapter):
                 entity_counters[entity_type] = entity_counters.get(entity_type, 0) + 1
                 count = entity_counters[entity_type]
                 doc_ent_id = f"{entity_type}_{count}"
-                replacement = f"{_label_prefix_for(entity_type, rules)}{count}"
+                replacement = ent.get("replacement") or f"{_label_prefix_for(entity_type, rules)}{count}"
                 all_entities.append({
                     "id": doc_ent_id,
                     "entity_type": entity_type,
@@ -319,6 +324,8 @@ class DOCXAdapter(DocumentAdapter):
                 para_text, rules, hashlib.sha256(para_text.encode("utf-8")).hexdigest(),
                 mode, level, model_dir,
             )
+            if profile_name is None:
+                profile_name = seg_map.get("profile")
 
             if redacted_para_text == para_text:
                 para_idx += 1
@@ -415,6 +422,7 @@ class DOCXAdapter(DocumentAdapter):
             "redacted_file": redacted_path,
             "source_sha256": source_sha256,
             "redacted_sha256": redacted_sha256,
+            "profile": profile_name,
             "level": level,
             "mode": mode,
             "entities": all_entities,
@@ -437,6 +445,7 @@ class DOCXAdapter(DocumentAdapter):
         audit_data = {
             "schema_version": "1.1",
             "document_type": "docx",
+            "profile": profile_name,
             "summary": {
                 "total_entities": len(all_entities),
                 "total_occurrences": len(all_occurrences),
@@ -522,6 +531,15 @@ class DOCXAdapter(DocumentAdapter):
         full_text, _ = self.extract_text(path)
         from .engine_regex import scan_regex_for_audit
         residual = scan_regex_for_audit(full_text, rules)
+        profile_name = map_data.get("profile")
+        if profile_name:
+            try:
+                profile = load_profile(profile_name)
+            except FileNotFoundError:
+                profile = None
+            if profile is not None:
+                redact_types = profile.redact_entity_types()
+                residual = [f for f in residual if f.entity_type in redact_types]
 
         entities = map_data.get("entities", [])
         occurrences = map_data.get("occurrences", [])
@@ -540,6 +558,7 @@ class DOCXAdapter(DocumentAdapter):
         return {
             "schema_version": "1.1",
             "document_type": "docx",
+            "profile": profile_name,
             "summary": {
                 "total_entities": len(entities),
                 "total_occurrences": len(occurrences),

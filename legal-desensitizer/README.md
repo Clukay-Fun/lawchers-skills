@@ -1,6 +1,8 @@
 # legal-desensitizer
 
-文档脱敏 CLI：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**。正则引擎开箱即用；人名/地址/机构名等实体识别可选接入本地 NER（ONNX）模型。图片/扫描件可走**不可逆** OCR 派生（可选 `[ocr]` extra）。
+**通用案件材料脱敏 skill**：通用脱敏核心 + 场景化 profile。对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**；图片/扫描件走**不可逆** OCR 派生（可选 `[ocr]` extra）。正则引擎开箱即用，人名/地址/机构名等实体识别可选接入本地 NER（ONNX）模型。
+
+> 定位：通用案件材料脱敏工具，**已通过劳动案件场景首轮实战验收**。当前成熟 profile：`labor`（默认）。换刑事/商事/婚姻家事/医疗等场景时**不改核心引擎**，只新增/调整 profile + allowlist/denylist + 规则 + 验收样本。
 
 - 命令：`legal-desens`
 - 可逆性靠**位置映射**（不靠字符串替换）；还原前用 **SHA-256** 防错配。
@@ -19,6 +21,30 @@
 ```
 
 调用规范与安全边界见 `SKILL.md`、`AGENTS.md`、`CLAUDE.md`，使用前必读。
+
+---
+
+## 安装 Skill 时同时准备模型
+
+把本目录作为 Codex/Claude skill 安装后，还需要在同一目录执行一次安装脚本，脚本会同时完成：
+
+```text
+pip install .
+下载 GitHub Release Asset 里的 NER ONNX 模型
+校验 SHA-256
+legal-desens ner-inspect
+```
+
+推荐命令：
+
+```bash
+cd legal-desensitizer
+LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
+bash scripts/install_with_model.sh
+```
+
+只复制 `SKILL.md` 或只执行 `pip install .` 不会自动下载 360MB 模型；这种情况下仍可用 `--regex-only`，但不能启用 NER。
 
 ---
 
@@ -210,6 +236,36 @@ NER 模型搜索顺序：`--model-dir` → `LEGAL_DESENS_MODEL_DIR` → `~/.lega
 
 ---
 
+## 脱敏策略（场景 profile）
+
+**通用核心 + 场景 profile**：引擎通用，"哪些类型脱、哪些保留、用什么标签"由 profile 配置决定。用 `--profile <name>` 选择（默认 `labor`）。
+
+| profile | 适用 | 时间 | 金额 | 身份/联系方式/证件/银行账号/地址/机构 |
+|---|---|---|---|---|
+| `labor`（默认，已验证） | 劳动争议/民事，需保留时间线与金额计算 | 保留 | 保留 | 脱敏 |
+| `strict`（全脱/安全优先） | 不需保留任何可识别信息 | 脱敏 | 脱敏 | 脱敏 |
+
+标签为无编号中文方括号：`【姓名】【机构】【地址】【手机号】…`，可逆性不受影响（restore 按位置回填，不靠标签文本）。
+
+```bash
+legal-desens redact input.docx              # 默认 labor：保留时间/金额
+legal-desens redact input.docx --profile strict   # 全脱
+```
+
+**扩展到新场景**（不改核心引擎，只加配置 + 验收样本）：
+
+| 场景 | 取向（示例方向，尚未内置 profile） |
+|---|---|
+| 劳动（已验证） | 保留时间线、金额 |
+| 刑事 | 可保留案发时间；更严处理地点、人员关系、未成年人信息 |
+| 商事 | 可保留金额；重合同编号、账户、客户名、商业秘密词 |
+| 婚姻家事 | 重姓名、住址、子女信息、证件、联系方式 |
+| 医疗 | 重姓名、证件、病历号；医院/医生是否脱按用途定 |
+
+> 目前仅 `labor` / `strict` 已内置并验证；其余为扩展方向（按需新增 profile + allow/deny + 规则 + 验收样本）。
+
+---
+
 ## 使用
 
 ### 各格式能力一览（决策表）
@@ -230,14 +286,17 @@ NER 模型搜索顺序：`--model-dir` → `LEGAL_DESENS_MODEL_DIR` → `~/.lega
 ### 脱敏（redact）
 
 ```bash
-# 纯文本，仅正则
+# 纯文本，仅正则（默认 labor profile：保留时间/金额）
 legal-desens redact input.txt \
-  --level strict --regex-only \
+  --regex-only \
   --out out.redacted.txt --map out.map.json --audit out.audit.json
 
 # Word，启用 NER（需先 install-model 且 ner-inspect 通过）
 legal-desens redact input.docx \
-  --level strict \
+  --out input.redacted.docx --map input.map.json --audit input.audit.json
+
+# 全脱敏（含时间/金额）：切 strict profile
+legal-desens redact input.docx --profile strict \
   --out input.redacted.docx --map input.map.json --audit input.audit.json
 ```
 
@@ -281,9 +340,9 @@ legal-desens redact-scan input.png --ocr rapidocr \
 # 1) 安装并自测（默认 regex-only，无需任何模型）
 pip install . && pip install ".[dev]" && pytest
 
-# 2) 脱敏一份真实文档（regex-only 即可用）
+# 2) 脱敏一份真实文档（默认 labor profile，regex-only 即可用）
 legal-desens redact 合同.docx \
-  --level strict --regex-only \
+  --regex-only \
   --out 合同.redacted.docx --map 合同.map.json --audit 合同.audit.json
 
 # 3) 核对审计

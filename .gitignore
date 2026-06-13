@@ -5,5 +5,5 @@ legal-desensitizer/tmp/
 legal-desensitizer/*.egg-info/
 legal-desensitizer/.pytest_cache/
 legal-desensitizer/dist/
-
 legal-desensitizer/build/
+legal-desensitizer/contract_output/
