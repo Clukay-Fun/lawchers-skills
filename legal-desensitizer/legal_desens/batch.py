@@ -171,6 +171,7 @@ def _process_one(
     allowlist: Set[str],
     denylist: Set[str],
     model_dir: Optional[str],
+    regex_only: bool = False,
 ) -> dict:
     """Process a single file. Returns a result dict with redacted text + metadata.
 
@@ -178,6 +179,7 @@ def _process_one(
     """
     ext = src.suffix.lower()
     category = _classify_ext(src)
+    mode = "regex-only" if regex_only else "regex+ner"
 
     if category == "C":
         raise BatchError(_C_CONVERT_MSG.format(ext=ext))
@@ -206,7 +208,7 @@ def _process_one(
                 text=tf.text,
                 rules=rules,
                 source_sha256=tf.sha256,
-                mode="regex+ner",
+                mode=mode,
                 level="labor",
                 model_dir=model_dir,
                 profile=profile,
@@ -235,7 +237,7 @@ def _process_one(
                     redacted_path=tmp.name,
                     redact_fn=_txt_redact_fn,
                     rules=rules,
-                    mode="regex+ner",
+                    mode=mode,
                     level="labor",
                     model_dir=model_dir,
                 )
@@ -267,7 +269,7 @@ def _process_one(
                     redacted_path=tmp.name,
                     redact_fn=_txt_redact_fn,
                     rules=rules,
-                    mode="regex+ner",
+                    mode=mode,
                     level="labor",
                     model_dir=model_dir,
                 )
@@ -289,7 +291,7 @@ def _process_one(
             image_path=str(src),
             rules=rules,
             ocr_engine="rapidocr",
-            mode="regex+ner",
+            mode=mode,
             level="labor",
             model_dir=model_dir,
             profile=profile,
@@ -682,6 +684,7 @@ def batch_redact_case(
     confirm_delete: bool = False,
     model_dir: Optional[str] = None,
     rules_path: Optional[str] = None,
+    regex_only: bool = False,
 ) -> int:
     """Run batch case redaction. Returns exit code (0 = success).
 
@@ -695,9 +698,13 @@ def batch_redact_case(
     denylist = _load_denylist(denylist_file)
 
     # ── Step 1: NER pre-check (fail = stop, no fallback) ──
-    print("[1/8] NER pre-check...", file=sys.stderr)
-    ner_info = _precheck_ner(model_dir)
-    print(f"  NER OK: {ner_info.get('model_dir', 'unknown')}", file=sys.stderr)
+    if regex_only:
+        print("[1/8] NER pre-check skipped (--regex-only).", file=sys.stderr)
+        ner_info = {"mode": "regex-only", "ner": "skipped"}
+    else:
+        print("[1/8] NER pre-check...", file=sys.stderr)
+        ner_info = _precheck_ner(model_dir)
+        print(f"  NER OK: {ner_info.get('model_dir', 'unknown')}", file=sys.stderr)
 
     # ── Step 2: Discover files ──
     input_path = Path(input_dir)
@@ -752,7 +759,7 @@ def batch_redact_case(
         )
         try:
             result = _process_one(
-                src, doc_id, rules, profile, allowlist, denylist, model_dir,
+                src, doc_id, rules, profile, allowlist, denylist, model_dir, regex_only,
             )
         except BatchError:
             raise

@@ -631,8 +631,41 @@ class TestBatchRedactCaseIntegration:
         # "海源" should be redacted
         assert "海源" not in redacted
 
+# ── 8. Explicit regex-only batch mode ───────────────────────────────────────
 
-# ── 8. Missing OCR for scan files ───────────────────────────────────────────
+
+class TestBatchRegexOnly:
+    def test_explicit_regex_only_skips_ner_precheck(self, tmp_path, monkeypatch):
+        """Explicit --regex-only mode can run when NER is unavailable."""
+        from legal_desens import batch as batch_module
+        from legal_desens.batch import batch_redact_case
+
+        def fail_precheck(model_dir=None):
+            raise BatchError("NER should not be inspected in regex-only mode")
+
+        monkeypatch.setattr(batch_module, "_precheck_ner", fail_precheck)
+
+        input_dir = _make_input_dir(tmp_path, {
+            "doc1.txt": "联系电话13800138000。",
+        })
+        out_dir = str(tmp_path / "output")
+
+        rc = batch_redact_case(
+            input_dir=input_dir,
+            out_dir=out_dir,
+            profile_name="labor",
+            regex_only=True,
+        )
+
+        assert rc == 0
+        redacted = (tmp_path / "output" / _FINAL_DIR / "doc_01.redacted.md").read_text(
+            encoding="utf-8"
+        )
+        assert "13800138000" not in redacted
+        assert "【手机号】" in redacted
+
+
+# ── 9. Missing OCR for scan files ───────────────────────────────────────────
 
 
 class TestMissingOcr:
