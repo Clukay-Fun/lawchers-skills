@@ -27,7 +27,7 @@ legal-desens = "legal_desens.cli:main"
 include = ["legal_desens*"]
 
 [tool.setuptools.package-data]
-legal_desens = ["rules/*.json"]
+legal_desens = ["rules/*.json", "profiles/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

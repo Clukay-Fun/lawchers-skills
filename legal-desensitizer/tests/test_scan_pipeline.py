@@ -296,7 +296,36 @@ class TestCLIScanCommands:
         assert rc == 1
 
 
-# ── 5. Restore Not Supported ─────────────────────────────────────────────────
+# ── 5. Manual Review Warnings ────────────────────────────────────────────────
+
+
+class TestManualReviewWarnings:
+    def test_scan_flags_short_digits_and_single_char_signer(self, tmp_path, rules, monkeypatch):
+        from legal_desens.engine.ocr import OCRLine, OCRResult
+        import legal_desens.scan as scan_mod
+
+        image = tmp_path / "scan.png"
+        image.write_bytes(b"fake image bytes")
+
+        def fake_ocr(path, confidence_threshold=0.7):
+            return OCRResult(
+                text="身份证尾号疑似44030737\n授权代表：张\n",
+                lines=[
+                    OCRLine("身份证尾号疑似44030737", [], 0.99),
+                    OCRLine("授权代表：张", [], 0.99),
+                ],
+                warnings=[],
+            )
+
+        monkeypatch.setattr(scan_mod, "run_rapidocr", fake_ocr)
+        _, _, audit_data, _ = scan_mod.scan_redact(str(image), rules, mode="regex-only")
+
+        warning_types = {w["type"] for w in audit_data["warnings"]}
+        assert "manual_review_suspicious_short_digits" in warning_types
+        assert "manual_review_single_char_signer" in warning_types
+
+
+# ── 6. Restore Not Supported ─────────────────────────────────────────────────
 
 
 @requires_rapidocr
@@ -317,7 +346,7 @@ class TestRestoreNotSupported:
         # call-site level (SKILL.md / agent instructions).
 
 
-# ── 6. Dependency Isolation ──────────────────────────────────────────────────
+# ── 7. Dependency Isolation ──────────────────────────────────────────────────
 
 
 class TestDependencyIsolation:

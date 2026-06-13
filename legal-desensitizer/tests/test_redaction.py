@@ -20,6 +20,7 @@ from legal_desens.engine.span import Span
 from legal_desens.redact import redact, LabelAllocator
 from legal_desens.restore import restore
 from legal_desens.audit import audit
+from legal_desens.profile import load_profile
 
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
@@ -64,10 +65,44 @@ class TestRegexEngine:
         spans = scan_regex(text, rules)
         assert any(s.entity_type == "PHONE" and s.text == "13800138000" for s in spans)
 
+    def test_landline_match(self, rules):
+        text = "座机0755-23982682，分机0755-23982682-123。"
+        spans = scan_regex(text, rules)
+        landlines = [s.text for s in spans if s.entity_type == "LANDLINE"]
+        assert "0755-23982682" in landlines
+        assert "0755-23982682-123" in landlines
+
     def test_id_card_match(self, rules):
         text = "身份证110101199001011234。"
         spans = scan_regex(text, rules)
         assert any(s.entity_type == "ID_CARD" and s.text == "110101199001011234" for s in spans)
+
+    def test_bank_account_match(self, rules):
+        """Context-aware BANK_ACCOUNT detection: with trigger words, digits are matched."""
+        from legal_desens.engine.bank_account import detect_bank_accounts
+        text = "收款账号11005545236302，联系电话15817465075。"
+        # First get regex spans (phone, etc.)
+        spans = scan_regex(text, rules)
+        # Then context-aware bank detection
+        bank_spans, warnings = detect_bank_accounts(text, spans)
+        bank_accounts = [s.text for s in bank_spans if s.entity_type == "BANK_ACCOUNT"]
+        assert "11005545236302" in bank_accounts
+        # Phone should NOT be detected as bank account
+        assert "15817465075" not in bank_accounts
+
+    def test_bank_branch_match(self, rules):
+        text = "开户行平安银行深圳江苏大厦支行，账号11005545236302。"
+        spans = scan_regex(text, rules)
+        branches = [s.text for s in spans if s.entity_type == "BANK_BRANCH"]
+        assert "开户行平安银行深圳江苏大厦支行" in branches
+
+    def test_id_card_wins_over_bank_account(self, rules):
+        """ID_CARD regex should win over any bank account detection."""
+        text = "身份证110101199001011234。"
+        spans = scan_regex(text, rules)
+        kept, discarded = merge_spans(spans)
+        assert any(s.entity_type == "ID_CARD" for s in kept)
+        assert not any(s.entity_type == "BANK_ACCOUNT" for s in kept)
 
     def test_email_match(self, rules):
         text = "邮箱test@example.com。"
@@ -78,6 +113,13 @@ class TestRegexEngine:
         text = "案号(2024)京0101民初12345号。"
         spans = scan_regex(text, rules)
         assert any(s.entity_type == "CASE_NO" for s in spans)
+
+    def test_contract_and_short_case_no_match(self, rules):
+        text = "合同编号[2026]律代字第（2o」号，案号26SZ-SMSO9。"
+        spans = scan_regex(text, rules)
+        case_numbers = [s.text for s in spans if s.entity_type == "CASE_NO"]
+        assert "合同编号[2026]律代字第（2o」号" in case_numbers
+        assert "案号26SZ-SMSO9" in case_numbers
 
     def test_money_match(self, rules):
         text = "请求支付货款人民币壹佰万元，并承担违约金¥12000。"
@@ -113,6 +155,7 @@ class TestNERInterface:
                 rules=rules,
                 source_sha256=hashlib.sha256("电话13800138000。".encode("utf-8")).hexdigest(),
                 mode="regex+ner",
+                model_dir="/nonexistent",
             )
 
     def test_regex_plus_ner_audit_marks_best_effort(self, rules, monkeypatch):
@@ -130,7 +173,8 @@ class TestNERInterface:
             mode="regex+ner",
         )
 
-        assert "人物1" in redacted_text
+        # Default profile is labor → bracket_unnumbered labels
+        assert "【姓名】" in redacted_text
         assert map_data["mode"] == "regex+ner"
         assert audit_data["best_effort"] is True
         assert any(w["type"] == "best_effort_notice" for w in audit_data["warnings"])
@@ -351,15 +395,15 @@ class TestRoundTrip:
         assert restored_sha == source_sha, "SHA-256 mismatch: round-trip not byte-identical"
 
     def test_money_roundtrip_with_chinese_label(self, rules):
-        """MONEY regex redacts with Chinese label '金额' and round-trips correctly."""
+        """MONEY regex redacts with Chinese label '金额' and round-trips correctly (strict profile)."""
         text = "支付货款人民币壹佰万元整，另付违约金¥12000。"
         source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        strict = load_profile("strict")
 
-        redacted_text, map_data, _ = redact(text, rules, source_sha, mode="regex-only")
+        redacted_text, map_data, _ = redact(text, rules, source_sha, mode="regex-only", profile=strict)
 
-        # MONEY entities must use Chinese label prefix
-        assert "金额1" in redacted_text
-        assert "金额2" in redacted_text
+        # MONEY entities must use Chinese label prefix (strict redacts MONEY)
+        assert "【金额】" in redacted_text
         assert "壹佰万" not in redacted_text
         assert "12000" not in redacted_text
 
@@ -367,7 +411,7 @@ class TestRoundTrip:
         money_entities = [e for e in map_data["entities"] if e["entity_type"] == "MONEY"]
         assert len(money_entities) >= 2
         for e in money_entities:
-            assert e["replacement"].startswith("金额")
+            assert e["replacement"] == "【金额】"
 
         # Round-trip
         redacted_sha = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
@@ -376,14 +420,15 @@ class TestRoundTrip:
         assert restored == text
 
     def test_money_plus_phone_roundtrip_chinese_labels(self, rules):
-        """MONEY + PHONE coexist, both use Chinese labels, round-trip intact."""
+        """MONEY + PHONE coexist, both use Chinese labels, round-trip intact (strict profile)."""
         text = "原告张三，电话13800138000，诉请支付人民币伍万元。"
         source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        strict = load_profile("strict")
 
-        redacted_text, map_data, _ = redact(text, rules, source_sha, mode="regex-only")
+        redacted_text, map_data, _ = redact(text, rules, source_sha, mode="regex-only", profile=strict)
 
-        assert "手机号1" in redacted_text
-        assert "金额1" in redacted_text
+        assert "【手机号】" in redacted_text
+        assert "【金额】" in redacted_text
 
         redacted_sha = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
         map_data["redacted_sha256"] = redacted_sha
@@ -560,6 +605,59 @@ class TestCLI:
             main(["--help"])
         assert exc_info.value.code == 0
 
+    def test_cli_writes_engine_audit_data(self, tmp_path, monkeypatch):
+        from legal_desens.cli import main
+
+        input_file = tmp_path / "input.txt"
+        out_file = tmp_path / "out.txt"
+        map_file = tmp_path / "map.json"
+        audit_file = tmp_path / "audit.json"
+        input_file.write_text("张三电话13800138000。", encoding="utf-8")
+
+        def fake_redact(**kwargs):
+            return (
+                "人物1电话手机号1。",
+                {
+                    "schema_version": "1.0",
+                    "source_file": "",
+                    "redacted_file": "",
+                    "source_sha256": kwargs["source_sha256"],
+                    "redacted_sha256": "",
+                    "level": kwargs["level"],
+                    "mode": kwargs["mode"],
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "entities": [],
+                    "occurrences": [],
+                },
+                {
+                    "schema_version": "1.0",
+                    "summary": {
+                        "total_entities": 0,
+                        "total_occurrences": 0,
+                        "by_entity_type": {},
+                        "by_engine": {},
+                    },
+                    "residual_scan": {"passed": True, "findings": []},
+                    "warnings": [{"type": "best_effort_notice"}],
+                    "best_effort": True,
+                },
+            )
+
+        monkeypatch.setattr("legal_desens.cli.redact", fake_redact)
+
+        ret = main([
+            "redact",
+            str(input_file),
+            "--out", str(out_file),
+            "--map", str(map_file),
+            "--audit", str(audit_file),
+        ])
+
+        assert ret == 0
+        audit_data = json.loads(audit_file.read_text(encoding="utf-8"))
+        assert audit_data["best_effort"] is True
+        assert audit_data["warnings"][0]["type"] == "best_effort_notice"
+
     def test_installed_console_script_loads_default_rules(self, tmp_path):
         """Wheel install should run without --rules from outside the source tree."""
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -632,4 +730,5 @@ class TestCLI:
 
         assert result.returncode == 0, result.stderr
         assert out_file.exists()
-        assert "手机号1" in out_file.read_text(encoding="utf-8")
+        # Default profile is labor → bracket_unnumbered labels
+        assert "【手机号】" in out_file.read_text(encoding="utf-8")

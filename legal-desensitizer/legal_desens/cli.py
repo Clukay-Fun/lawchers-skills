@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .audit import audit
 from .io import read_text, write_text
+from .profile import load_profile, resolve_profile_name
 from .redact import redact
 from .restore import restore
 from .rules import load_rules
@@ -66,9 +67,18 @@ def _get_adapter(fmt: str):
         return None
 
 
-def _txt_redact_fn(text, rules, source_sha256, mode, level, model_dir):
-    """Wrapper to call text redact engine with standard signature."""
-    return redact(text, rules, source_sha256, mode, level, model_dir)
+def _make_txt_redact_fn(profile=None, allowlist=None, denylist=None):
+    """Create a text redact function with profile, allowlist, and denylist bound."""
+    def _txt_redact_fn(text, rules, source_sha256, mode, level, model_dir):
+        return redact(
+            text, rules, source_sha256, mode, level, model_dir,
+            profile=profile, allowlist=allowlist, denylist=denylist,
+        )
+    _txt_redact_fn._profile = profile
+    _txt_redact_fn._profile_name = profile.name if profile else None
+    _txt_redact_fn._allowlist = allowlist
+    _txt_redact_fn._denylist = denylist
+    return _txt_redact_fn
 
 
 def _load_map_file(path: str) -> dict:
@@ -85,8 +95,48 @@ def _load_map_file(path: str) -> dict:
 
 
 def _cmd_redact(args: argparse.Namespace) -> int:
+    from .engine.allowlist import load_allowlist
+
     rules = load_rules(args.rules)
     fmt = _detect_format(args.input)
+
+    # Resolve profile
+    profile_name = resolve_profile_name(
+        getattr(args, "profile", None),
+        args.level,
+    )
+
+    # Load entity_policy if provided
+    entity_policy_file = getattr(args, "entity_policy", None)
+
+    try:
+        profile = load_profile(
+            profile_name,
+            entity_policy_file=entity_policy_file,
+        )
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Load allowlist and denylist
+    allowlist_file = getattr(args, "allowlist", None)
+    denylist_file = getattr(args, "denylist", None)
+
+    allowlist = load_allowlist(
+        builtin=True,
+        case_file=allowlist_file,
+    ) if allowlist_file else load_allowlist(builtin=True)
+
+    denylist = set()
+    if denylist_file:
+        try:
+            with open(denylist_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    term = line.strip()
+                    if term and not line.startswith("#"):
+                        denylist.add(term)
+        except FileNotFoundError:
+            print(f"Warning: denylist file not found: {denylist_file}", file=sys.stderr)
 
     # A: Core reversible formats
     if fmt in ("txt", "md"):
@@ -102,6 +152,9 @@ def _cmd_redact(args: argparse.Namespace) -> int:
                 mode="regex-only" if args.regex_only else "regex+ner",
                 level=args.level,
                 model_dir=args.model_dir,
+                profile=profile,
+                allowlist=allowlist,
+                denylist=denylist,
             )
         except (RuntimeError, FileNotFoundError) as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -132,9 +185,8 @@ def _cmd_redact(args: argparse.Namespace) -> int:
                 json.dump(map_data, f, ensure_ascii=False, indent=2)
 
         if args.audit:
-            audit_result = audit(redacted_text, map_data, rules)
             with open(args.audit, "w", encoding="utf-8") as f:
-                json.dump(audit_result, f, ensure_ascii=False, indent=2)
+                json.dump(audit_data, f, ensure_ascii=False, indent=2)
 
         return 0
 
@@ -148,7 +200,7 @@ def _cmd_redact(args: argparse.Namespace) -> int:
             map_data, audit_data = csv_redact(
                 source_path=args.input,
                 redacted_path=args.out,
-                redact_fn=_txt_redact_fn,
+                redact_fn=_make_txt_redact_fn(profile, allowlist, denylist),
                 rules=rules,
                 mode="regex-only" if args.regex_only else "regex+ner",
                 level=args.level,
@@ -178,7 +230,7 @@ def _cmd_redact(args: argparse.Namespace) -> int:
             map_data, audit_data = adapter.redact(
                 source_path=args.input,
                 redacted_path=args.out,
-                redact_fn=_txt_redact_fn,
+                redact_fn=_make_txt_redact_fn(profile, allowlist, denylist),
                 rules=rules,
                 mode="regex-only" if args.regex_only else "regex+ner",
                 level=args.level,
@@ -350,9 +402,48 @@ def _cmd_restore(args: argparse.Namespace) -> int:
 
 def _cmd_redact_scan(args: argparse.Namespace) -> int:
     """Redact-scan: OCR → redact → irreversible derivative (Markdown)."""
+    from .engine.allowlist import load_allowlist
     from .scan import scan_redact
 
     rules = load_rules(args.rules)
+
+    # Resolve profile
+    profile_name = resolve_profile_name(
+        getattr(args, "profile", None),
+        args.level,
+    )
+
+    # Load entity_policy if provided
+    entity_policy_file = getattr(args, "entity_policy", None)
+
+    try:
+        profile = load_profile(
+            profile_name,
+            entity_policy_file=entity_policy_file,
+        )
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Load allowlist and denylist
+    allowlist_file = getattr(args, "allowlist", None)
+    denylist_file = getattr(args, "denylist", None)
+
+    allowlist = load_allowlist(
+        builtin=True,
+        case_file=allowlist_file,
+    ) if allowlist_file else load_allowlist(builtin=True)
+
+    denylist = set()
+    if denylist_file:
+        try:
+            with open(denylist_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    term = line.strip()
+                    if term and not line.startswith("#"):
+                        denylist.add(term)
+        except FileNotFoundError:
+            print(f"Warning: denylist file not found: {denylist_file}", file=sys.stderr)
 
     try:
         redacted_text, map_data, audit_data, ocr_meta = scan_redact(
@@ -362,6 +453,9 @@ def _cmd_redact_scan(args: argparse.Namespace) -> int:
             mode="regex-only" if args.regex_only else "regex+ner",
             level=args.level,
             model_dir=args.model_dir,
+            profile=profile,
+            allowlist=allowlist,
+            denylist=denylist,
         )
     except ImportError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -429,10 +523,17 @@ def _cmd_audit(args: argparse.Namespace) -> int:
     rules = load_rules(args.rules)
     fmt = _detect_format(args.input)
 
+    # Resolve profile (from map or CLI)
+    profile_name = getattr(args, "profile", None) or map_data.get("profile", "labor")
+    try:
+        profile = load_profile(profile_name)
+    except FileNotFoundError:
+        profile = None
+
     # A: Core reversible formats
     if fmt in ("txt", "md"):
         tf = read_text(args.input)
-        result = audit(tf.text, map_data, rules)
+        result = audit(tf.text, map_data, rules, profile=profile)
 
     elif fmt == "csv":
         from .adapters.csv_adapter import csv_audit
@@ -516,6 +617,32 @@ def _cmd_ner_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_batch_redact_case(args: argparse.Namespace) -> int:
+    """Batch case redaction orchestrator."""
+    from .batch import BatchError, batch_redact_case
+
+    try:
+        rc = batch_redact_case(
+            input_dir=args.input,
+            out_dir=args.out,
+            profile_name=getattr(args, "profile", None) or "labor",
+            allowlist_file=getattr(args, "allowlist", None),
+            denylist_file=getattr(args, "denylist", None),
+            entity_policy_file=getattr(args, "entity_policy", None),
+            cleanup=getattr(args, "cleanup", "none"),
+            confirm_delete=getattr(args, "confirm_delete", False),
+            model_dir=getattr(args, "model_dir", None),
+            rules_path=args.rules,
+        )
+        return rc
+    except BatchError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"Unexpected error: {e}", file=sys.stderr)
+        return 1
+
+
 def _cmd_ner_spans(args: argparse.Namespace) -> int:
     from .engine.ner import NEREngine
 
@@ -569,12 +696,20 @@ def main(argv=None):
     # ── redact ──
     p_redact = sub.add_parser("redact", help="Redact sensitive information from document")
     p_redact.add_argument("input", help="Input file (.txt, .md, .csv, .docx, .xlsx)")
-    p_redact.add_argument("--level", default="strict", choices=["strict"],
-                          help="Redaction level (only 'strict' is currently supported)")
+    p_redact.add_argument("--profile", default=None, choices=["labor", "strict"],
+                          help="Redaction profile (default: labor)")
+    p_redact.add_argument("--level", default=None, choices=["labor", "strict"],
+                          help="Redaction level — maps to profile (strict→strict, labor→labor)")
     p_redact.add_argument("--regex-only", action="store_true", default=False,
                           help="Use only regex engine (skip NER)")
     p_redact.add_argument("--model-dir", default=None,
                           help="Path to NER model directory")
+    p_redact.add_argument("--allowlist", default=None,
+                          help="Path to case-specific allowlist file (one term per line, local, not in git)")
+    p_redact.add_argument("--denylist", default=None,
+                          help="Path to case-specific denylist file (one term per line, local, not in git)")
+    p_redact.add_argument("--entity-policy", default=None,
+                          help="Path to entity_policy JSON file (local, not in git)")
     p_redact.add_argument("--out", help="Output redacted file")
     p_redact.add_argument("--map", help="Output map JSON file")
     p_redact.add_argument("--audit", help="Output audit JSON file")
@@ -588,6 +723,8 @@ def main(argv=None):
     # ── audit ──
     p_audit = sub.add_parser("audit", help="Audit redacted document for residual sensitive data")
     p_audit.add_argument("input", help="Redacted file (.txt, .md, .csv, .docx, .xlsx)")
+    p_audit.add_argument("--profile", default=None, choices=["labor", "strict"],
+                         help="Redaction profile for residual scan (default: from map)")
     p_audit.add_argument("--regex-only", action="store_true", default=True,
                          help="Use only regex engine (default: true)")
     p_audit.add_argument("--map", required=True, help="Map JSON file")
@@ -631,12 +768,20 @@ def main(argv=None):
     p_scan.add_argument("input", help="Input image file (.png, .jpg, .jpeg, .tiff, .bmp) or scanned PDF")
     p_scan.add_argument("--ocr", default="rapidocr", choices=["rapidocr"],
                         help="OCR engine to use (default: rapidocr)")
-    p_scan.add_argument("--level", default="strict", choices=["strict"],
-                        help="Redaction level (only 'strict' is currently supported)")
+    p_scan.add_argument("--profile", default=None, choices=["labor", "strict"],
+                        help="Redaction profile (default: labor)")
+    p_scan.add_argument("--level", default=None, choices=["labor", "strict"],
+                        help="Redaction level — maps to profile (strict→strict, labor→labor)")
     p_scan.add_argument("--regex-only", action="store_true", default=False,
                         help="Use only regex engine (skip NER)")
     p_scan.add_argument("--model-dir", default=None,
                         help="Path to NER model directory")
+    p_scan.add_argument("--allowlist", default=None,
+                        help="Path to case-specific allowlist file (one term per line, local, not in git)")
+    p_scan.add_argument("--denylist", default=None,
+                        help="Path to case-specific denylist file (one term per line, local, not in git)")
+    p_scan.add_argument("--entity-policy", default=None,
+                        help="Path to entity_policy JSON file (local, not in git)")
     p_scan.add_argument("--out", help="Output redacted Markdown file")
     p_scan.add_argument("--map", help="Output map JSON file (with irreversible markers)")
     p_scan.add_argument("--audit", help="Output audit JSON file")
@@ -651,6 +796,30 @@ def main(argv=None):
                          help="Parser engine to use (default: docling)")
     p_parse.add_argument("--out", help="Output Markdown file")
     p_parse.add_argument("--meta", help="Output metadata JSON file")
+
+    # ── batch-redact-case ──
+    p_batch = sub.add_parser(
+        "batch-redact-case",
+        help="Batch case redaction: NER check -> profile + allow/deny -> redact -> report -> gate",
+    )
+    p_batch.add_argument("--input", required=True,
+                         help="Input directory containing case files")
+    p_batch.add_argument("--out", required=True,
+                         help="Output directory for redacted results")
+    p_batch.add_argument("--profile", default=None, choices=["labor", "strict"],
+                         help="Redaction profile (default: labor)")
+    p_batch.add_argument("--allowlist", default=None,
+                         help="Path to case-specific allowlist file")
+    p_batch.add_argument("--denylist", default=None,
+                         help="Path to case-specific denylist file")
+    p_batch.add_argument("--entity-policy", default=None,
+                         help="Path to entity_policy JSON file")
+    p_batch.add_argument("--cleanup", default="none", choices=["none", "archive", "delete"],
+                         help="Cleanup mode (default: none)")
+    p_batch.add_argument("--confirm-delete", action="store_true", default=False,
+                         help="Required with --cleanup delete to confirm permanent deletion")
+    p_batch.add_argument("--model-dir", default=None,
+                         help="Path to NER model directory")
 
     args = parser.parse_args(argv)
 
@@ -667,6 +836,7 @@ def main(argv=None):
         "ner-spans": _cmd_ner_spans,
         "redact-scan": _cmd_redact_scan,
         "parse": _cmd_parse,
+        "batch-redact-case": _cmd_batch_redact_case,
     }
 
     handler = handlers.get(args.command)

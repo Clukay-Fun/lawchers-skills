@@ -15,6 +15,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from legal_desens.engine.ner import (
     NEREngine,
+    MAX_MODEL_TOKENS,
+    USER_MODEL_DIR,
     _resolve_model_dir,
     _check_model_dir,
     _build_tokenizer,
@@ -60,7 +62,10 @@ class TestModelDirResolution:
     def test_default_dir(self, monkeypatch):
         monkeypatch.delenv("LEGAL_DESENS_MODEL_DIR", raising=False)
         d = _resolve_model_dir(None)
-        assert str(d) == os.path.normpath("/Applications/Desensitization/ydner_onnx")
+        if USER_MODEL_DIR.is_dir():
+            assert d == USER_MODEL_DIR
+        else:
+            assert str(d) == os.path.normpath("/Applications/Desensitization/ydner_onnx")
 
 
 # ── 2. Model directory validation ────────────────────────────────────────────
@@ -111,7 +116,8 @@ class TestErrorPaths:
         text = "电话13800138000。"
         sha = hashlib.sha256(text.encode()).hexdigest()
         redacted, map_data, _ = redact(text, rules, sha, mode="regex-only")
-        assert "手机号1" in redacted
+        # Default profile is labor → bracket_unnumbered labels
+        assert "【手机号】" in redacted
         assert map_data["mode"] == "regex-only"
 
     def test_inspect_ner_no_model(self):
@@ -185,6 +191,27 @@ class TestTokenizer:
         # Content token ids (excluding CLS/SEP) should match single-char ids
         content_ids = encoded.ids[1:-1]  # strip [CLS] and [SEP]
         assert content_ids == [zhang_id, san_id]
+
+    def test_long_text_is_chunked_to_model_token_limit(self, tmp_path, monkeypatch):
+        """Long NER input must be split before ONNX inference to avoid 512-token crashes."""
+        vocab = self._build_vocab(tmp_path)
+        engine = object.__new__(NEREngine)
+        engine._tokenizer = _build_tokenizer(vocab)
+        calls = []
+
+        def fake_infer_token_arrays(ids, attention_mask_values, offsets):
+            calls.append(len(ids))
+            assert len(ids) <= MAX_MODEL_TOKENS
+            return [0 for off in offsets if off is not None], [
+                off for off in offsets if off is not None
+            ]
+
+        monkeypatch.setattr(engine, "_infer_token_arrays", fake_infer_token_arrays)
+        tag_ids, offsets = engine.infer("张三向北京" * 140)
+
+        assert len(calls) > 1
+        assert max(calls) <= MAX_MODEL_TOKENS
+        assert len(tag_ids) == len(offsets)
 
 
 # ── 6. Tag scheme detection ──────────────────────────────────────────────────

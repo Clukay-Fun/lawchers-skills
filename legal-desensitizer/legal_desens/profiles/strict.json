@@ -1,0 +1,22 @@
+{
+  "name": "strict",
+  "label_style": "bracket_unnumbered",
+  "types": {
+    "PERSON":      {"action": "redact",   "label": "【姓名】"},
+    "ORG":         {"action": "redact",   "label": "【机构】"},
+    "ADDRESS":     {"action": "redact",   "label": "【地址】"},
+    "PHONE":       {"action": "redact",   "label": "【手机号】"},
+    "LANDLINE":    {"action": "redact",   "label": "【电话】"},
+    "ID_CARD":     {"action": "redact",   "label": "【身份证号】"},
+    "EMAIL":       {"action": "redact",   "label": "【邮箱】"},
+    "ORG_CODE":    {"action": "redact",   "label": "【统一社会信用代码】"},
+    "BANK_ACCOUNT":{"action": "redact",   "label": "【银行账号】"},
+    "BANK_BRANCH": {"action": "redact",   "label": "【银行信息】"},
+    "CASE_NO":     {"action": "redact",   "label": "【案号】"},
+    "TIME":        {"action": "redact",   "label": "【时间】"},
+    "MONEY":       {"action": "redact",   "label": "【金额】"}
+  },
+  "address_merge": true,
+  "org_abbrev_dict": true,
+  "conservative_markdown": true
+}

@@ -3,7 +3,8 @@
 #
 # Default behavior:
 #   1. pip install the project
-#   2. import RobertaCrfNerModel from the local desktop app
+#   2. install a NER model from LEGAL_DESENS_MODEL_URL, or legacy-import from
+#      LEGAL_DESENS_MODEL_SRC when no URL is set
 #   3. run ner-inspect so the operator sees whether NER is ready
 #
 # Environment overrides:
