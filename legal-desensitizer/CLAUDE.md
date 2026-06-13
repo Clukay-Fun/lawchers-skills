@@ -10,7 +10,7 @@ Follow the repository handoff rules in `/Users/clukay/Program/lawchers-skills/do
 - Use CLI tests as the primary validation surface.
 - Keep redaction maps and generated outputs out of git.
 - Keep model files out of ordinary git history unless the user explicitly chooses a model distribution strategy.
-- Default stack is commercial-safe (no AGPL). PDF is not supported.
+- Default stack is commercial-safe (no AGPL). PDF support is opt-in `[pdf]` extra (AGPL, local use only).
 
 ## Before Running Commands
 

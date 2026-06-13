@@ -768,7 +768,7 @@ def main(argv=None):
     )
     p_scan.add_argument(
         "input",
-        help="Input image file (.png, .jpg, .jpeg, .tiff, .bmp). Convert scanned PDFs to page images first.",
+        help="Input image file (.png, .jpg, .jpeg, .tiff, .bmp) or PDF (.pdf, requires [pdf] extra)",
     )
     p_scan.add_argument("--ocr", default="rapidocr", choices=["rapidocr"],
                         help="OCR engine to use (default: rapidocr)")

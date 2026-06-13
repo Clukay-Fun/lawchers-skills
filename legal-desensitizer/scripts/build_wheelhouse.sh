@@ -47,16 +47,29 @@ fi
 echo ""
 echo "==> Downloading dependency wheels (binary only)..."
 
-# Parse dependencies from pyproject.toml
+# Parse base dependencies plus install-time extras from pyproject.toml.
+# install_with_model.sh installs legal-desens[ocr,pdf], so the wheelhouse must
+# include those optional dependencies too.
 DEPS=$(python3 -c "
 import re, pathlib
 toml = pathlib.Path('$PROJECT_DIR/pyproject.toml').read_text()
-m = re.search(r'dependencies\s*=\s*\[(.*?)\]', toml, re.DOTALL)
+items = []
+m = re.search(r'^dependencies\s*=\s*\[(.*?)\]', toml, re.DOTALL | re.MULTILINE)
 if m:
-    for item in re.findall(r'\"([^\"]+)\"', m.group(1)):
-        # Strip version constraints: 'onnxruntime>=1.14' -> 'onnxruntime'
-        name = re.split(r'[><=!~]', item)[0].strip()
-        print(name)
+    items.extend(re.findall(r'\"([^\"]+)\"', m.group(1)))
+opt = re.search(r'^\[project\.optional-dependencies\](.*?)(?:^\[|\Z)', toml, re.DOTALL | re.MULTILINE)
+if opt:
+    block = opt.group(1)
+    for group in ('ocr', 'pdf'):
+        gm = re.search(r'^' + group + r'\s*=\s*\[(.*?)\]', block, re.DOTALL | re.MULTILINE)
+        if gm:
+            items.extend(re.findall(r'\"([^\"]+)\"', gm.group(1)))
+seen = set()
+for item in items:
+    if item in seen:
+        continue
+    seen.add(item)
+    print(item)
 ")
 
 # Optional: use a PyPI mirror via PIP_INDEX_URL env var
@@ -111,4 +124,4 @@ echo "    Wheels   : ${WHEEL_COUNT}"
 echo "    Manifest : ${OUT_DIR}/SHA256SUMS.txt"
 echo ""
 echo "Install command (offline):"
-echo "    pip install --no-index --find-links=${OUT_DIR} legal-desens"
+echo "    pip install --no-index --find-links=${OUT_DIR} 'legal-desens[ocr,pdf]'"

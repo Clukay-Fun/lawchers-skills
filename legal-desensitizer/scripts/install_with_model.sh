@@ -51,10 +51,10 @@ PIP=("$PYTHON" -m pip)
 echo "==> Installing legal-desens"
 if [ -n "$WHEELHOUSE" ] && [ -d "$WHEELHOUSE" ]; then
     echo "    Using local wheelhouse: $WHEELHOUSE"
-    "${PIP[@]}" install --no-index --find-links "$WHEELHOUSE" legal-desens
+    "${PIP[@]}" install --no-index --find-links "$WHEELHOUSE" "legal-desens[ocr,pdf]"
 else
     # shellcheck disable=SC2086
-    "${PIP[@]}" install --prefer-binary $PIP_EXTRA_ARGS "$INSTALL_TARGET"
+    "${PIP[@]}" install --prefer-binary $PIP_EXTRA_ARGS "$INSTALL_TARGET[ocr,pdf]"
 fi
 
 echo ""
