@@ -153,6 +153,15 @@ class TestTokenizer:
         assert encoded.tokens == ["[CLS]", "张", "三", "向", "北", "京", "[SEP]"]
         assert not any(token.startswith("##") for token in encoded.tokens)
 
+    def test_bert_processing_uses_tokenizers_compatible_signature(self, tmp_path):
+        """Building the tokenizer must work across tokenizers 0.13-0.23."""
+        vocab = self._build_vocab(tmp_path)
+        tokenizer = _build_tokenizer(vocab)
+        encoded = tokenizer.encode("张三")
+
+        assert encoded.tokens[0] == "[CLS]"
+        assert encoded.tokens[-1] == "[SEP]"
+
     def test_no_hash_prefix_on_any_chinese_char(self, tmp_path):
         """No token should have ## prefix when handle_chinese_chars is on."""
         vocab = self._build_vocab(tmp_path)
@@ -383,7 +392,7 @@ class TestNERCLI:
             "--out", out_file,
         ])
         assert ret == 0
-        with open(out_file) as f:
+        with open(out_file, encoding="utf-8") as f:
             data = json.load(f)
         assert "spans" in data
         for s in data["spans"]:

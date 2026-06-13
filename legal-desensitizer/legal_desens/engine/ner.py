@@ -165,8 +165,8 @@ def _build_tokenizer(vocab_path: Path, config_path: Optional[Path] = None):
     sep_id = tok.token_to_id("[SEP]") or 0
     if cls_id is not None and sep_id is not None:
         tok.post_processor = BertProcessing(
-            sep=(("[SEP]", sep_id)),
-            cls=(("[CLS]", cls_id)),
+            ("[SEP]", sep_id),
+            ("[CLS]", cls_id),
         )
 
     return tok

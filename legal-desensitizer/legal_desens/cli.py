@@ -633,6 +633,7 @@ def _cmd_batch_redact_case(args: argparse.Namespace) -> int:
             confirm_delete=getattr(args, "confirm_delete", False),
             model_dir=getattr(args, "model_dir", None),
             rules_path=args.rules,
+            regex_only=getattr(args, "regex_only", False),
         )
         return rc
     except BatchError as e:
@@ -765,7 +766,10 @@ def main(argv=None):
         "redact-scan",
         help="OCR image/scanned doc → redact → irreversible derivative (Markdown)",
     )
-    p_scan.add_argument("input", help="Input image file (.png, .jpg, .jpeg, .tiff, .bmp) or scanned PDF")
+    p_scan.add_argument(
+        "input",
+        help="Input image file (.png, .jpg, .jpeg, .tiff, .bmp). Convert scanned PDFs to page images first.",
+    )
     p_scan.add_argument("--ocr", default="rapidocr", choices=["rapidocr"],
                         help="OCR engine to use (default: rapidocr)")
     p_scan.add_argument("--profile", default=None, choices=["labor", "strict"],
@@ -820,6 +824,8 @@ def main(argv=None):
                          help="Required with --cleanup delete to confirm permanent deletion")
     p_batch.add_argument("--model-dir", default=None,
                          help="Path to NER model directory")
+    p_batch.add_argument("--regex-only", action="store_true", default=False,
+                         help="Explicitly use only regex engine and skip NER pre-check")
 
     args = parser.parse_args(argv)
 
