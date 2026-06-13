@@ -39,8 +39,6 @@ legal-desens ner-inspect
 
 ```bash
 cd legal-desensitizer
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
@@ -69,6 +67,12 @@ pip install .            # 或 pip install -e ".[dev]" 做开发
 legal-desens --help
 ```
 
+如果用户级安装后命令目录不在 `PATH`，等价使用：
+
+```bash
+python3 -m legal_desens.cli --help
+```
+
 ### 安装并准备 NER 模型（一条命令）
 
 > 默认 `--regex-only` 无需模型即可使用。若要启用 NER，推荐从本仓库 GitHub Release Asset 下载已经导出的 ONNX 模型包，并用 SHA-256 校验安装。
@@ -77,8 +81,6 @@ legal-desens --help
 
 ```bash
 cd legal-desensitizer
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
@@ -93,7 +95,10 @@ legal-desens ner-inspect
 常用环境变量：
 
 ```bash
-# 从 GitHub Release Asset 下载模型（推荐）
+# 从内置 GitHub Release Asset 下载模型（推荐）
+bash scripts/install_with_model.sh
+
+# 覆盖模型下载地址（仅在换 release asset 时使用）
 LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
 LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
@@ -101,12 +106,25 @@ bash scripts/install_with_model.sh
 # legacy/import-only：已有本地兼容模型目录时导入
 LEGAL_DESENS_MODEL_SRC=/path/to/ydner_onnx bash scripts/install_with_model.sh
 
-# 只安装 CLI，不安装模型
+# 只安装 CLI，不安装模型（regex-only）
 LEGAL_DESENS_SKIP_MODEL=1 bash scripts/install_with_model.sh
 
 # 强制重装模型
 LEGAL_DESENS_FORCE_MODEL=1 bash scripts/install_with_model.sh
+
+# 使用本地 wheelhouse 加速/离线安装
+LEGAL_DESENS_WHEELHOUSE=dist/wheelhouse-macos-arm64 bash scripts/install_with_model.sh
 ```
+
+### 安装速度建议
+
+优先级从快到慢：
+
+1. **单可执行文件**：最快，用户无需 Python 和 pip；适合最终交付。
+2. **wheelhouse 离线安装**：快且可审计；适合同平台批量部署。
+3. **普通 `pip install .`**：最灵活；开发/调试用。
+
+不要把 360MB NER 模型塞进 wheel 或二进制。模型用 `legal-desens install-model --url ... --sha256 ...` 单独安装，便于更新、校验和替换。
 
 ### 离线 / 免编译安装（两种分发物）
 

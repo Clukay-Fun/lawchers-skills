@@ -1,23 +1,29 @@
 ---
 name: legal-desensitizer
-description: General-purpose Chinese case-material redaction skill (general core + scenario profiles) using the local legal-desens CLI. Redact, restore, and audit sensitive information across .txt/.md/.csv (byte-level), .docx/.xlsx (content-level), images/scanned docs via OCR (irreversible). Scenario profiles control redact-vs-preserve: `labor` (default, validated — preserves timeline/amounts, redacts identity) and `strict` (full redaction); new scenarios (criminal/commercial/family/medical) add a profile without changing the core engine. PDF is not supported in the commercial-safe core. Use when a user asks to desensitize case documents, generate redaction maps, restore redacted documents, or audit residual sensitive data.
+description: "General-purpose Chinese case-material redaction skill using the local legal-desens CLI. Use when a user asks to desensitize case documents, run batch redaction, generate final Markdown and sensitive reports, restore/audit maps, install the GitHub Release NER model, or troubleshoot regex/NER/OCR redaction across txt, md, csv, docx, xlsx, and scanned images."
 ---
 
 # Legal Desensitizer
 
 Use the local `legal-desens` CLI for legal document redaction, restoration, and audit. The CLI is the sole capability core—this skill instructs agents how to call it correctly.
 
-## Skill Installation Bootstrap
-
-Installing or copying this skill does **not** by itself download the NER model. On a fresh machine, after the skill directory is present, run this bootstrap from the project root to install the CLI and prepare the local model:
+If `legal-desens` is not on `PATH` after installation, use the equivalent module form:
 
 ```bash
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
+python3 -m legal_desens.cli <subcommand> ...
+```
+
+## Mandatory Bootstrap On Fresh Machines
+
+When this skill is present but `legal-desens` or NER is not ready, do not stop at `ner-inspect` failure. First run the bootstrap from the project root:
+
+```bash
 bash scripts/install_with_model.sh
 ```
 
-This downloads the GitHub Release Asset, verifies SHA-256, installs it into the default model directory, and runs `legal-desens ner-inspect`. If this bootstrap has not been run, agents must use `--regex-only`.
+The script has the approved GitHub Release Asset URL and SHA-256 built in. It installs the CLI, downloads the NER ONNX model, verifies SHA-256, installs the model, and runs `legal-desens ner-inspect` including self-test. Use `LEGAL_DESENS_SKIP_MODEL=1` only when the user explicitly wants regex-only.
+
+For faster/offline installs, first build or provide a wheelhouse and set `LEGAL_DESENS_WHEELHOUSE=/path/to/wheelhouse`. Do not use a stale wheelhouse.
 
 ## Quick Decision Table
 
@@ -32,7 +38,7 @@ Before running any command, determine the file extension:
 | `.xlsx` | yes | yes | yes | content | `redacted.xlsx` + `map.json`, `redacted_sha256` must match |
 | `.png/.jpg/.jpeg/.tiff/.bmp` | `redact-scan` | **no restore** | via map | irreversible | Not restorable — derivative only |
 | `.pptx/.html` | `redact-scan` or `parse` | **no restore** | via map | irreversible | Not restorable — derivative only |
-| scanned `.pdf` | `redact-scan` | **no restore** | via map | irreversible | Not restorable — derivative only |
+| scanned `.pdf` | convert pages to images, then `redact-scan` | **no restore** | via map | irreversible | Not restorable — derivative only |
 | `.doc/.xls/.wps/.et/.dps/.pages/.numbers/.key` | **unsupported** | **unsupported** | **unsupported** | — | Convert to .docx/.xlsx/.pptx or PDF/image first |
 
 **Verification semantics:**
@@ -44,7 +50,7 @@ Before running any command, determine the file extension:
 
 The CLI supports two detection engines: **regex** (always available) and **NER** (requires local ONNX model).
 
-**Default mode: `--regex-only` is the reliable core.** Structured PII (phone, ID card, email, case number, social credit code, monetary amount) is handled deterministically by regex rules. No model is needed or downloaded.
+**Reliable fallback: `--regex-only`.** Structured PII (phone, ID card, email, case number, social credit code, monetary amount) is handled deterministically by regex rules. No model is needed for this fallback.
 
 **NER is optional best-effort.** When enabled, NER may detect person names, locations, organizations, and time expressions. However, NER results are **not a desensitization safety guarantee**:
 
@@ -56,14 +62,21 @@ The CLI supports two detection engines: **regex** (always available) and **NER**
 
 **You must follow this flow—do not skip steps or pretend NER ran:**
 
-1. Run `legal-desens ner-inspect` to check if the NER model is available.
-2. If `ner-inspect` succeeds → you may omit `--regex-only` (enables regex+ner).
-3. If `ner-inspect` fails, errors, or model path is unknown → **must** pass `--regex-only`.
-4. In your final report, state whether this run used `regex-only` or `regex+ner`.
+1. Run `legal-desens ner-inspect`.
+2. If the command is missing, the model is missing, or `self_test.passed` is false, run `bash scripts/install_with_model.sh` once from this skill/project root.
+3. Run `legal-desens ner-inspect` again.
+4. If `self_test.passed: true` → use regex+ner by omitting `--regex-only`.
+5. If bootstrap fails or the user explicitly declines model install → use `--regex-only` and report that NER was unavailable.
+6. In your final report, state whether this run used `regex-only` or `regex+ner`.
 
 ```bash
-# Step 1: Check NER availability
+# Step 1: Check NER availability and self-test
 legal-desens ner-inspect
+# If command is not on PATH:
+python3 -m legal_desens.cli ner-inspect
+
+# If missing or self_test.passed=false, install CLI + GitHub Release model
+bash scripts/install_with_model.sh
 
 # Step 2a: NER available — run without --regex-only
 legal-desens redact input.txt --level strict --out ... --map ... --audit ...
@@ -74,11 +87,9 @@ legal-desens redact input.txt --level strict --regex-only --out ... --map ... --
 
 **Never** omit `--regex-only` when NER has not been verified. The CLI will error clearly if you try to use NER without a valid model, but the agent must not reach that state.
 
-For a fresh workstation, prefer installing the CLI and NER model from a GitHub Release Asset:
+For a fresh workstation, use the built-in bootstrap:
 
 ```bash
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 ```
 
@@ -172,7 +183,8 @@ legal-desens redact-scan <input.png> \
   --audit <output.audit.json>
 ```
 
-- Accepts: `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, scanned `.pdf`
+- Accepts: `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`
+- Does not accept PDF directly in the commercial-safe core. Convert scanned PDF pages to images first, then run `redact-scan` on those images.
 - Requires: `pip install legal-desens[ocr]` (RapidOCR, lightweight ONNX)
 - Output: redacted Markdown + map (irreversible) + audit
 - Map marks `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`
@@ -227,10 +239,10 @@ legal-desens parse <input.pdf> \
 - Formula cells are skipped with a warning in audit.
 - Shared strings are never modified in-place (cells switched to inline string).
 
-### .pdf (text PDF — unsupported in core)
+### .pdf (unsupported in core)
 - Text PDF is not supported in the commercial-safe core (PyMuPDF was removed due to AGPL licensing).
 - CLI will return a clear unsupported error with non-zero exit code.
-- Use `redact-scan` for scanned/image PDFs (requires `[ocr]` extra).
+- For scanned PDFs, convert pages to `.png`/`.jpg` first, then use `redact-scan`.
 - Use `parse` for complex PDFs (requires `[parse-docling]` extra).
 
 ### .pptx / .html
@@ -238,12 +250,38 @@ legal-desens parse <input.pdf> \
 - CLI returns a clear error directing to the appropriate command.
 - **Not reversible.** Derivative copies only.
 
-### .png / .jpg / .jpeg / .tiff / .bmp / scanned PDF
+### .png / .jpg / .jpeg / .tiff / .bmp
 - Use `redact-scan` — irreversible OCR → redact → Markdown derivative.
 - Requires `pip install legal-desens[ocr]` (RapidOCR).
 - **Not reversible.** Map marks `restore_supported: false`, `best_effort: true`.
 - OCR may miss or misrecognize characters — residual scan only covers recognized text.
 - Low-confidence lines (< 0.7) are flagged in audit warnings.
+
+### scanned PDF
+- Direct PDF input is not supported by `redact-scan` after PyMuPDF removal.
+- Convert each page to an image first, then run `redact-scan`.
+- Keep only final redacted Markdown and the sensitive report; intermediate OCR/map/audit files belong in a local work directory and should be deleted after success.
+
+## Batch Case Redaction
+
+For folders of case materials, prefer the orchestrator instead of hand-written scripts:
+
+```bash
+legal-desens batch-redact-case \
+  --input <case-folder> \
+  --out <output-folder> \
+  --profile labor
+```
+
+Default successful output contains only:
+
+```text
+final_redacted_md/
+SENSITIVE_REDACTION_REPORT_DO_NOT_UPLOAD.md
+run_manifest.json
+```
+
+Sensitive intermediate files are created under `_work_sensitive_do_not_upload/` and deleted on successful default runs. Use `--cleanup none` only for debugging; use `--cleanup archive` when the user asks to preserve map/audit/source index locally.
 
 ### .doc / .xls / .wps / .et / .dps / .pages / .numbers / .key
 - Unsupported formats — CLI returns a clear error with conversion guidance.
