@@ -12,17 +12,17 @@ Read `/Users/clukay/Program/lawchers-skills/docs/HANDOFF.md` before implementati
 - MCP is deferred (006); do not introduce MCP dependencies.
 - Do not implement frontend work unless explicitly asked.
 
-## CLI Capabilities (as of 010)
+## CLI Capabilities (as of 019)
 
 - `legal-desens redact` — .txt / .md / .csv / .docx / .xlsx (reversible)
 - `legal-desens restore` — .txt / .md / .csv / .docx / .xlsx (reversible)
 - `legal-desens audit` — .txt / .md / .csv / .docx / .xlsx
-- `legal-desens redact-scan` — image/scanned doc → OCR → redact → irreversible derivative (requires `[ocr]`)
+- `legal-desens redact-scan` — image/PDF → OCR → redact → irreversible derivative (requires `[ocr]`; PDF also requires `[pdf]`)
 - `legal-desens parse` — document → Markdown via Docling (requires `[parse-docling]`)
 - `legal-desens ner-inspect` — check NER model availability
 - `legal-desens ner-spans` — run NER and output spans (debug)
 
-### Format Matrix (010)
+### Format Matrix (019)
 
 **A: Core reversible (byte-level)**
 - .txt, .md, .csv — byte-level round-trip (BOM, CRLF, newline, dialect preserved)
@@ -31,15 +31,17 @@ Read `/Users/clukay/Program/lawchers-skills/docs/HANDOFF.md` before implementati
 - .docx, .xlsx — content-level round-trip (extracted text matches)
 
 **B: Irreversible (route to 009)**
-- .pdf, .png, .jpg, .jpeg, .tiff, .bmp, .pptx, .html — use `redact-scan` or `parse`
+- .png, .jpg, .jpeg, .tiff, .bmp, .pptx, .html — use `redact-scan` or `parse`
+- .pdf — use `redact-scan` (requires `[pdf]`+`[ocr]` extras, AGPL opt-in)
 
 **C: Unsupported (conversion guidance)**
 - .doc, .xls, .wps, .et, .dps, .pages, .numbers, .key — convert first
 
 ## Default Stack (commercial-safe)
 
-- No AGPL dependencies (PyMuPDF removed in 008)
+- No AGPL dependencies in default install (PyMuPDF removed in 008)
 - Permissive-only: onnxruntime, tokenizers, lxml, python-docx, openpyxl
+- PDF support via opt-in `[pdf]` extra (PyMuPDF, AGPL, local use only)
 
 ## Agent Decision Flow
 
@@ -48,14 +50,15 @@ Read `/Users/clukay/Program/lawchers-skills/docs/HANDOFF.md` before implementati
 3. For any redact: run `ner-inspect` first; use regex+ner only when `self_test.passed=true`, otherwise explicitly pass `--regex-only`.
 4. Always pass `--out`, `--map`, `--audit` to `redact`.
 5. For restore: verify `redacted_sha256` match (CLI does this, but agent should not force restore if mismatched).
-6. For scan images: use `redact-scan` — map is irreversible, no restore possible. Convert scanned PDFs to images first; do not pass PDF directly.
+6. For scan images/PDF: use `redact-scan` — map is irreversible, no restore possible. PDF requires `[pdf]`+`[ocr]` extras.
 7. For case folders: prefer `batch-redact-case`; successful default output keeps final Markdown, sensitive report, and no-PII manifest while deleting `_work_sensitive_do_not_upload/`.
 8. Report: state mode (regex-only or regex+ner), entity counts, verification result.
 
-## Scan Pipeline (009) Notes
+## Scan Pipeline (009/019) Notes
 
 - `redact-scan` produces **irreversible** derivatives — `restore_supported: false`, `best_effort: true`.
-- Direct PDF input is not supported in the commercial-safe core. Convert scanned PDF pages to images before OCR.
+- PDF input supported via opt-in `[pdf]` extra (AGPL). Each page rendered to 200 DPI PNG → OCR → redact → per-page Markdown sections.
+- Missing `[pdf]` or `[ocr]` extra → clear error with install guidance, no silent skip.
 - OCR may miss/misrecognize characters — this is expected. The `best_effort` flag in map/audit documents this.
 - Low-confidence OCR lines (< 0.7) appear as warnings in audit.
 - Map schema: `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`.

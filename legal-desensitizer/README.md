@@ -6,7 +6,7 @@
 
 - 命令：`legal-desens`
 - 可逆性靠**位置映射**（不靠字符串替换）；还原前用 **SHA-256** 防错配。
-- **commercial-safe**：默认栈不含 AGPL/商用限制依赖（PyMuPDF 已移除），PDF 不在 core 支持。
+- **commercial-safe**：默认栈不含 AGPL/商用限制依赖（PyMuPDF 已移除）；PDF 为 opt-in `[pdf]` extra（AGPL，本地自用）。
 
 ---
 
@@ -74,6 +74,8 @@ bash scripts/install_with_model.sh
 - Python ≥ 3.9
 - 依赖（`pip install .` 自动装）：`onnxruntime`、`tokenizers`、`lxml`、`python-docx`、`openpyxl`
 - **NER 可选（best-effort）**：默认 `--regex-only` 无需任何模型即可用。想额外识别人名/机构/地址，可接入一个**兼容的中文 token-classification ONNX 模型**：用自带脚本导出一个开源模型（推荐，见「启用 NER」一节），或自带模型用 `--model-dir` 指向。没有模型完全不影响使用。
+- **OCR 可选**：`pip install ".[ocr]"` 装 RapidOCR，支持图片/扫描件 OCR。
+- **PDF 可选（AGPL）**：`pip install ".[pdf]"` 装 PyMuPDF，支持 PDF 直接输入。默认 core 不含此依赖，保持 AGPL-free/commercial-safe。
 
 ## 安装
 
@@ -82,6 +84,7 @@ cd legal-desensitizer
 python3 -m venv .venv && source .venv/bin/activate
 pip install --upgrade pip
 pip install .            # 或 pip install -e ".[dev]" 做开发
+pip install ".[pdf]"     # 可选：装 PyMuPDF 支持 PDF 直接输入（AGPL）
 ```
 
 安装后 `legal-desens` 命令可用：
@@ -205,9 +208,13 @@ pytest                        # 覆盖 txt/md/csv/docx/xlsx、跨 run、sharedSt
 
 # 若要连 OCR scan 测试一起跑，需装 ocr extra，否则那部分用例会因缺依赖失败：
 pip install ".[dev,ocr]" && pytest
+
+# 若要连 PDF 测试一起跑，需装 pdf + ocr extra：
+pip install ".[dev,ocr,pdf]" && pytest
 ```
 
 > 不装 `[ocr]` 时，core（txt/md/csv/docx/xlsx）测试全绿即可视为可用；OCR scan 相关用例需 `[ocr]` extra 才会通过。
+> PDF 相关用例需 `[pdf]`+`[ocr]` extra 才会通过。
 > NER 相关用例在未装模型时自动跳过（skipped），属正常。
 
 ## 启用 NER（可选，best-effort）
@@ -319,7 +326,7 @@ legal-desens redact input.docx --profile strict   # 全脱
 | `.docx` | redact / restore / audit | **内容级**（提取文本一致） | redacted.docx + map.json |
 | `.xlsx` | redact / restore / audit | **内容级**（单元格文本一致） | redacted.xlsx + map.json |
 | 图片 / 扫描件 | `redact-scan`（不可逆） | **不支持还原** | 需 `[ocr]` extra，输出脱敏 Markdown 派生副本 |
-| `.pdf`  | 不支持 | — | PyMuPDF 已移除（AGPL）；扫描型 PDF 走 `redact-scan` |
+| `.pdf`  | `redact-scan`（不可逆） | **不支持还原** | 需 `[pdf]`+`[ocr]` extra（AGPL），PDF→图片→OCR→脱敏 Markdown |
 | `.doc/.xls/.wps/...` | 不支持 | — | 先转换为 `.docx/.xlsx` 再处理 |
 
 每次 redact 产出三件套：`<name>.redacted.<ext>`、`<name>.map.json`、`<name>.audit.json`。
@@ -361,11 +368,19 @@ legal-desens audit out.redacted.txt --map out.map.json --out out.audit.json
 
 输出命中数量、实体类型分布、引擎来源、覆盖告警、残留扫描结果。
 
-### 图片 / 扫描件 OCR（不可逆，可选）
+### 图片 / 扫描件 OCR / PDF（不可逆，可选）
 
 ```bash
 pip install ".[ocr]"        # 装 RapidOCR（轻量，ONNXRuntime）
+pip install ".[pdf]"        # 装 PyMuPDF（AGPL，本地自用）— 支持 PDF 直接输入
+pip install ".[ocr,pdf]"    # 两者都装（推荐）
+
+# 图片输入
 legal-desens redact-scan input.png --ocr rapidocr \
+  --out input.redacted.md --map input.map.json --audit input.audit.json
+
+# PDF 输入（需 [pdf]+[ocr]）
+legal-desens redact-scan input.pdf --ocr rapidocr \
   --out input.redacted.md --map input.map.json --audit input.audit.json
 ```
 
@@ -403,6 +418,7 @@ legal-desens restore 合同.redacted.docx --map 合同.map.json --out 合同.res
 - redacted 文件与 map 不匹配时**不要强行还原**。
 - 模型未装时如实使用 `--regex-only` 并在报告中说明，不要假装跑了 NER。
 - **NER 是 best-effort，不是安全保证。** 启用 NER 时报告"regex+ner (best-effort)"，注明可能漏公司名/地址，不得宣称 NER 覆盖完整。
+- **PDF extra 含 AGPL 依赖（PyMuPDF）。** 默认 core 保持 AGPL-free/commercial-safe；`[pdf]` 仅 opt-in 供本地自用，不分发。
 
 ## 故障排查
 

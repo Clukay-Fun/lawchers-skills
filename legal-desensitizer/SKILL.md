@@ -38,7 +38,7 @@ Before running any command, determine the file extension:
 | `.xlsx` | yes | yes | yes | content | `redacted.xlsx` + `map.json`, `redacted_sha256` must match |
 | `.png/.jpg/.jpeg/.tiff/.bmp` | `redact-scan` | **no restore** | via map | irreversible | Not restorable — derivative only |
 | `.pptx/.html` | `redact-scan` or `parse` | **no restore** | via map | irreversible | Not restorable — derivative only |
-| scanned `.pdf` | convert pages to images, then `redact-scan` | **no restore** | via map | irreversible | Not restorable — derivative only |
+| scanned `.pdf` | `redact-scan`（需 `[pdf]`+`[ocr]`） | **no restore** | via map | irreversible | Not restorable — derivative only |
 | `.doc/.xls/.wps/.et/.dps/.pages/.numbers/.key` | **unsupported** | **unsupported** | **unsupported** | — | Convert to .docx/.xlsx/.pptx or PDF/image first |
 
 **Verification semantics:**
@@ -172,10 +172,10 @@ legal-desens ner-spans <input.txt> [--model-dir <path>] [--out spans.json]
 
 - Runs NER on text and outputs detected spans as JSON (for debugging)
 
-### Redact-Scan (irreversible, requires `[ocr]` extra)
+### Redact-Scan (irreversible, requires `[ocr]` extra; PDF also requires `[pdf]`)
 
 ```bash
-legal-desens redact-scan <input.png> \
+legal-desens redact-scan <input.png|input.pdf> \
   --ocr rapidocr \
   [--regex-only] \
   --out <output.redacted.md> \
@@ -183,9 +183,9 @@ legal-desens redact-scan <input.png> \
   --audit <output.audit.json>
 ```
 
-- Accepts: `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`
-- Does not accept PDF directly in the commercial-safe core. Convert scanned PDF pages to images first, then run `redact-scan` on those images.
-- Requires: `pip install legal-desens[ocr]` (RapidOCR, lightweight ONNX)
+- Accepts: `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.pdf` (PDF requires `[pdf]` extra)
+- For PDF input: renders each page to image → OCR → redact → per-page Markdown sections
+- Requires: `pip install legal-desens[ocr]` (RapidOCR); for PDF also `pip install legal-desens[pdf]`
 - Output: redacted Markdown + map (irreversible) + audit
 - Map marks `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`
 - **No restore possible** — this produces derivative copies only
@@ -239,11 +239,14 @@ legal-desens parse <input.pdf> \
 - Formula cells are skipped with a warning in audit.
 - Shared strings are never modified in-place (cells switched to inline string).
 
-### .pdf (unsupported in core)
-- Text PDF is not supported in the commercial-safe core (PyMuPDF was removed due to AGPL licensing).
-- CLI will return a clear unsupported error with non-zero exit code.
-- For scanned PDFs, convert pages to `.png`/`.jpg` first, then use `redact-scan`.
-- Use `parse` for complex PDFs (requires `[parse-docling]` extra).
+### .pdf (opt-in [pdf] extra, AGPL)
+- PDF support is an opt-in `[pdf]` extra (PyMuPDF, AGPL licensed, local use only).
+- Default core remains AGPL-free / commercial-safe — `pip install .` does not include PyMuPDF.
+- Install with `pip install legal-desens[pdf]` or `pip install legal-desens[ocr,pdf]`.
+- `redact-scan input.pdf` renders each page to image → OCR → redact → Markdown derivative.
+- **Not reversible.** Map marks `restore_supported: false`, `best_effort: true`.
+- Missing `[pdf]` extra → CLI returns a clear error with install guidance.
+- Missing `[ocr]` extra → CLI returns a clear error (OCR is required for the pipeline).
 
 ### .pptx / .html
 - Irreversible formats — use `redact-scan` or `parse` (requires `[ocr]` or `[parse-docling]` extra).
@@ -258,8 +261,10 @@ legal-desens parse <input.pdf> \
 - Low-confidence lines (< 0.7) are flagged in audit warnings.
 
 ### scanned PDF
-- Direct PDF input is not supported by `redact-scan` after PyMuPDF removal.
-- Convert each page to an image first, then run `redact-scan`.
+- `redact-scan input.pdf` directly — renders pages to images → OCR → redact → Markdown derivative.
+- Requires both `[pdf]` and `[ocr]` extras: `pip install legal-desens[pdf,ocr]`.
+- Each page is rendered as a 200 DPI PNG, OCR'd independently, then merged into per-page Markdown sections.
+- Map marks `restore_supported: false`, `best_effort: true` — **not reversible**.
 - Keep only final redacted Markdown and the sensitive report; intermediate OCR/map/audit files belong in a local work directory and should be deleted after success.
 
 ## Batch Case Redaction

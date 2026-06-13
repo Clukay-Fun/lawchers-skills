@@ -44,6 +44,9 @@ _C_CONVERT_MSG = (
 # Scan formats that require [ocr] extra
 _SCAN_NEEDS_OCR = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
 
+# PDF additionally requires [pdf] extra (fitz)
+_PDF_NEEDS_PDF = {".pdf"}
+
 _REPORT_FILENAME = "SENSITIVE_REDACTION_REPORT_DO_NOT_UPLOAD.md"
 _SOURCE_INDEX_FILENAME = "SENSITIVE_SOURCE_INDEX_DO_NOT_UPLOAD.json"
 _MANIFEST_FILENAME = "run_manifest.json"
@@ -108,6 +111,18 @@ def _check_ocr_available() -> None:
         )
 
 
+def _check_pdf_available() -> None:
+    """Check if PDF extra is installed. Raise BatchError if not."""
+    try:
+        import importlib
+        importlib.import_module("fitz")
+    except ImportError:
+        raise BatchError(
+            "PDF extra [pdf] is not installed but PDF files were found. "
+            "Install with: pip install legal-desens[pdf]"
+        )
+
+
 def _load_denylist(path: Optional[str]) -> Set[str]:
     """Load denylist from file."""
     result: Set[str] = set()
@@ -139,6 +154,16 @@ def _count_pages(path: Path, ext: str) -> int:
             wb = load_workbook(str(path), read_only=True)
             count = len(wb.sheetnames)
             wb.close()
+            return count
+        except Exception:
+            return 1
+    elif ext == ".pdf":
+        try:
+            import importlib
+            fitz = importlib.import_module("fitz")
+            doc = fitz.open(str(path))
+            count = len(doc)
+            doc.close()
             return count
         except Exception:
             return 1
@@ -753,6 +778,11 @@ def batch_redact_case(
         )
 
     if has_scan_files:
+        _check_ocr_available()
+
+    has_pdf_files = any(f.suffix.lower() == ".pdf" for f in doc_files)
+    if has_pdf_files:
+        _check_pdf_available()
         _check_ocr_available()
 
     # ── Step 3: Process each file ──
