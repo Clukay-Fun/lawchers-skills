@@ -9,7 +9,7 @@
 #
 # Environment overrides:
 #   LEGAL_DESENS_INSTALL_TARGET  Project path or wheel path. Defaults to repo root.
-#   LEGAL_DESENS_MODEL_URL       Model archive URL, e.g. GitHub Release Asset.
+#   LEGAL_DESENS_MODEL_URL       Model archive URL, e.g. ModelScope, GitHub Release Asset, or object storage.
 #   LEGAL_DESENS_MODEL_SHA256    Required when LEGAL_DESENS_MODEL_URL is set.
 #   LEGAL_DESENS_MODEL_SRC       Source ydner_onnx directory. Defaults to app path.
 #   LEGAL_DESENS_MODEL_TARGET    Target model directory.
@@ -24,7 +24,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 INSTALL_TARGET="${LEGAL_DESENS_INSTALL_TARGET:-$PROJECT_DIR}"
-DEFAULT_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip"
+DEFAULT_MODEL_URL="https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx/resolve/master/bert4ner-base-chinese-onnx.zip"
 DEFAULT_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703"
 MODEL_URL="${LEGAL_DESENS_MODEL_URL:-$DEFAULT_MODEL_URL}"
 MODEL_SHA256="${LEGAL_DESENS_MODEL_SHA256:-$DEFAULT_MODEL_SHA256}"

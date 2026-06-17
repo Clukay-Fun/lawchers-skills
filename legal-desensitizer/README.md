@@ -5,8 +5,9 @@
 > 定位：通用案件材料脱敏工具，**已通过劳动案件场景首轮实战验收**。当前成熟 profile：`labor`（默认）。换刑事/商事/婚姻家事/医疗等场景时**不改核心引擎**，只新增/调整 profile + allowlist/denylist + 规则 + 验收样本。
 
 - 命令：`legal-desens`
+- NER 模型包：[`Clukay416/legal-desens-bert4ner-onnx`](https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx)
 - 可逆性靠**位置映射**（不靠字符串替换）；还原前用 **SHA-256** 防错配。
-- **commercial-safe**：默认栈不含 AGPL/商用限制依赖（PyMuPDF 已移除）；PDF 为 opt-in `[pdf]` extra（AGPL，本地自用）。
+- **commercial-safe core**：默认栈不含 AGPL/商用限制依赖；PDF 为 opt-in `[pdf]` extra（AGPL，本地自用）。
 
 ---
 
@@ -31,7 +32,7 @@
 
 1. cd /Users/clukay/Program/lawchers-skills/legal-desensitizer
 2. bash scripts/install_with_model.sh
-   - 该脚本已内置 GitHub Release NER 模型包 URL 和 SHA-256
+   - 该脚本已内置 ModelScope NER 模型包 URL 和 SHA-256
    - 会安装 CLI、下载模型、校验 SHA-256、安装模型并运行 ner-inspect
 3. 如果 legal-desens 不在 PATH，使用 python3 -m legal_desens.cli 等价调用
 4. 执行 python3 -m legal_desens.cli ner-inspect，确认输出里 self_test.passed=true
@@ -53,7 +54,7 @@ LEGAL_DESENS_SKIP_MODEL=1 bash scripts/install_with_model.sh
 
 ```text
 pip install .
-下载 GitHub Release Asset 里的 NER ONNX 模型
+下载 ModelScope 上的 NER ONNX 模型
 校验 SHA-256
 legal-desens ner-inspect
 ```
@@ -101,7 +102,7 @@ python3 -m legal_desens.cli --help
 
 ### 安装并准备 NER 模型（一条命令）
 
-> 默认 `--regex-only` 无需模型即可使用。若要启用 NER，推荐从本仓库 GitHub Release Asset 下载已经导出的 ONNX 模型包，并用 SHA-256 校验安装。
+> 默认 `--regex-only` 无需模型即可使用。若要启用 NER，推荐从 ModelScope 下载已经导出的 ONNX 模型包，并用 SHA-256 校验安装。
 
 一条命令安装 CLI + 下载/安装 NER 模型：
 
@@ -114,18 +115,18 @@ bash scripts/install_with_model.sh
 
 ```text
 pip install .
-legal-desens install-model --url <GitHub Release Asset URL> --sha256 <SHA256>
+legal-desens install-model --url <ModelScope URL> --sha256 <SHA256>
 legal-desens ner-inspect
 ```
 
 常用环境变量：
 
 ```bash
-# 从内置 GitHub Release Asset 下载模型（推荐）
+# 从内置 ModelScope 模型仓库下载模型（推荐）
 bash scripts/install_with_model.sh
 
-# 覆盖模型下载地址（仅在换 release asset 时使用）
-LEGAL_DESENS_MODEL_URL="https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+# 覆盖模型下载地址（仅在换 ModelScope / GitHub Release / 对象存储地址时使用）
+LEGAL_DESENS_MODEL_URL="https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx/resolve/master/bert4ner-base-chinese-onnx.zip" \
 LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
 bash scripts/install_with_model.sh
 
@@ -221,19 +222,25 @@ pip install ".[dev,ocr,pdf]" && pytest
 
 默认 `--regex-only` 不需要模型。要额外识别人名/机构/地址，按下面任一方式接入一个兼容的 ONNX 模型。
 
-### 推荐：从 GitHub Release Asset 下载模型包
+### 推荐：从 ModelScope 下载模型包
 
-模型权重不进入 git 仓库。推荐把导出的 ONNX 模型包放到本仓库的 GitHub Release Asset 中，然后用 URL + SHA-256 安装：
+模型权重不进入 git 仓库。当前公开模型包放在 ModelScope：
+
+```text
+https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx
+```
+
+可用 URL + SHA-256 安装：
 
 ```bash
 legal-desens install-model \
-  --url "https://github.com/Clukay-Fun/lawchers-skills/releases/download/legal-desens-ner-v0.1/bert4ner-base-chinese-onnx.zip" \
+  --url "https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx/resolve/master/bert4ner-base-chinese-onnx.zip" \
   --sha256 "d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703"
 
 legal-desens ner-inspect
 ```
 
-Release Asset 模型包必须是 `.zip` 或 `.tar.gz`，解压后顶层包含：
+模型包必须是 `.zip` 或 `.tar.gz`，解压后顶层包含：
 
 ```text
 model.onnx
@@ -242,14 +249,7 @@ vocab.txt
 labels.json 或 config.json 内含 id2label/label2id
 ```
 
-建议 Release 命名：
-
-```text
-tag:   legal-desens-ner-v0.1
-asset: bert4ner-base-chinese-onnx.zip
-```
-
-下载链接和 SHA-256 应同步记录在 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
+如需自托管，也可以放到 GitHub Release Asset 或对象存储；下载链接和 SHA-256 应同步记录在 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
 
 ### 本地导出开源模型
 
@@ -269,7 +269,7 @@ legal-desens redact input.txt --model-dir ~/ner-bert4ner --out ... --map ... --a
 ### 其他方式
 
 ```bash
-# 自托管模型包下载（GitHub Release Asset / 对象存储均可）
+# 自托管模型包下载（ModelScope / GitHub Release Asset / 对象存储均可）
 legal-desens install-model --url <URL> --sha256 <HASH>
 
 # legacy：若本机恰好已有一个兼容模型目录，可直接导入
@@ -426,7 +426,7 @@ legal-desens restore 合同.redacted.docx --map 合同.map.json --out 合同.res
 
 - `legal-desens: command not found` → 使用 `python3 -m legal_desens.cli ...`，或确认用户级脚本目录在 `PATH`。
 - 编辑模式安装报错（旧 pip）→ 先 `pip install --upgrade pip`。
-- `ner-inspect` 报找不到模型或 `self_test.passed=false` → 先运行 `bash scripts/install_with_model.sh`，它会从 GitHub Release 下载并校验模型。
+- `ner-inspect` 报找不到模型或 `self_test.passed=false` → 先运行 `bash scripts/install_with_model.sh`，它会从 ModelScope 下载并校验模型。
 - 非 `--regex-only` 报模型错误 → 这是预期的"不静默降级"，装好模型或显式加 `--regex-only`。
 
 ## 规则
