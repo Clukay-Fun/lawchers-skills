@@ -1,6 +1,6 @@
 ---
 name: legal-desensitizer
-description: "General-purpose Chinese case-material redaction skill using the local legal-desens CLI. Use when a user asks to desensitize case documents, run batch redaction, generate final Markdown and sensitive reports, restore/audit maps, install the GitHub Release NER model, or troubleshoot regex/NER/OCR redaction across txt, md, csv, docx, xlsx, and scanned images."
+description: "General-purpose Chinese case-material redaction skill using the local legal-desens CLI. Use when a user asks to desensitize case documents, run batch redaction, generate final Markdown and sensitive reports, restore/audit maps, install the ModelScope NER model, or troubleshoot regex/NER/OCR redaction across txt, md, csv, docx, xlsx, and scanned images."
 ---
 
 # Legal Desensitizer
@@ -21,7 +21,7 @@ When this skill is present but `legal-desens` or NER is not ready, do not stop a
 bash scripts/install_with_model.sh
 ```
 
-The script has the approved GitHub Release Asset URL and SHA-256 built in. It installs the CLI, downloads the NER ONNX model, verifies SHA-256, installs the model, and runs `legal-desens ner-inspect` including self-test. Use `LEGAL_DESENS_SKIP_MODEL=1` only when the user explicitly wants regex-only.
+The script has the approved ModelScope model URL and SHA-256 built in. It installs the CLI, downloads the NER ONNX model, verifies SHA-256, installs the model, and runs `legal-desens ner-inspect` including self-test. Use `LEGAL_DESENS_SKIP_MODEL=1` only when the user explicitly wants regex-only.
 
 For faster/offline installs, first build or provide a wheelhouse and set `LEGAL_DESENS_WHEELHOUSE=/path/to/wheelhouse`. Do not use a stale wheelhouse.
 
@@ -75,7 +75,7 @@ legal-desens ner-inspect
 # If command is not on PATH:
 python3 -m legal_desens.cli ner-inspect
 
-# If missing or self_test.passed=false, install CLI + GitHub Release model
+# If missing or self_test.passed=false, install CLI + ModelScope model
 bash scripts/install_with_model.sh
 
 # Step 2a: NER available — run without --regex-only

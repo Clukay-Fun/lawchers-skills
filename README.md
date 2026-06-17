@@ -6,7 +6,7 @@
 
 | 项目 | 作用 | 状态 |
 |------|------|------|
-| [`legal-desensitizer/`](legal-desensitizer/) | **通用案件材料脱敏 skill**（通用核心 + 场景 profile）：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**，图片/扫描件走不可逆 OCR；profile 控制脱/留（`labor` 默认已验证、`strict` 全脱）。可选接入本地 NER；commercial-safe，不含 AGPL 依赖 | 可用（劳动场景首轮验收） |
+| [`legal-desensitizer/`](legal-desensitizer/) | **通用案件材料脱敏 skill**（通用核心 + 场景 profile）：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**，图片/扫描件走不可逆 OCR；profile 控制脱/留（`labor` 默认已验证、`strict` 全脱）。可选接入本地 NER；PDF 支持为 opt-in extra | 可用（劳动场景首轮验收） |
 
 ## 给 AI 代理的快速入口
 
@@ -22,18 +22,3 @@
 cd legal-desensitizer
 # 按该目录 README 安装、跑 pytest 自测、再 redact 真实文档
 ```
-
-## 设计纪律（所有子项目共用）
-
-- **CLI 是唯一能力核心**；Skill/README/未来的 MCP 都只是调用外壳。
-- **可逆性靠位置映射**，不靠字符串替换。
-- **SHA-256 防错配**：还原前校验脱敏文件，错配即报错不强行还原。
-- **可逆 / 不可逆两类能力分清**：txt/md/csv/docx/xlsx 可逆；OCR/parse 派生不可逆（`restore_supported:false`、`best_effort`），不混为一谈。
-- **commercial-safe**：默认栈不含 AGPL 或商用限制依赖（PyMuPDF 已移除），不用云 API。
-- **不静默降级**：能力缺失（如模型/`[ocr]` extra 未装）时明确报错，不假装成功。
-
-## 仓库约定
-
-- **`docs/` 不进 git**：通用开发须知 `docs/HANDOFF.md` 与各项目 `docs/plan/00X-*.md` 阶段计划只在本地保留，不上传。代理派工时由人工指向对应文档。
-- 生成产物（脱敏文件、map、audit）、模型文件、`tmp/` 不进 git。
-- 提交、分支、合并等 git 操作一律人工处理；开发代理只改工作区、不碰 git。
