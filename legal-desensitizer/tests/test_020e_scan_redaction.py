@@ -89,6 +89,71 @@ class TestScanRedaction:
         assert map_data["intermediate_markdown_file"] == markdown.name
         assert audit["verification"]["passed"] is True
 
+    def test_short_ner_span_uses_padded_skewed_ocr_polygon(self, monkeypatch, tmp_path):
+        """Short NER spans must cover variable-width glyph edges in a skewed OCR line."""
+        from PIL import Image
+
+        from legal_desens.engine.ocr import OCRLine, OCRResult
+        from legal_desens.scan import redact_scan_pixels
+        import legal_desens.scan as scan_mod
+
+        source = tmp_path / "source.png"
+        output = tmp_path / "redacted.png"
+        Image.new("RGB", (120, 40), "black").save(source)
+
+        line = OCRLine(
+            text="甲乙丙王小明丁戊己庚",
+            box=[[10, 5], [110, 9], [108, 29], [8, 25]],
+            confidence=0.99,
+        )
+        calls = 0
+
+        def fake_ocr(path, confidence_threshold=0.7):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return OCRResult(text=line.text, lines=[line])
+
+            # The actual variable-width glyphs extend beyond the naive 30-60%
+            # proportional slice. Simulate verification OCR retaining the name
+            # unless those edge pixels were also covered.
+            with Image.open(path) as redacted:
+                pixels = redacted.convert("RGB")
+                covered = (
+                    pixels.getpixel((31, 15)) == (255, 255, 255)
+                    and pixels.getpixel((79, 18)) == (255, 255, 255)
+                )
+            text = "" if covered else "王小明"
+            return OCRResult(text=text, lines=[])
+
+        def fake_redact(**kwargs):
+            occurrence = {
+                "entity_id": "e1",
+                "original_start": 3,
+                "original_end": 6,
+                "redacted_start": 3,
+                "redacted_end": 7,
+            }
+            return (
+                "甲乙丙【姓名】丁戊己庚",
+                {
+                    "entities": [{"entity_id": "e1", "original": "王小明"}],
+                    "occurrences": [occurrence],
+                },
+                {"summary": {}, "residual_scan": {"passed": True}, "warnings": []},
+            )
+
+        monkeypatch.setattr(scan_mod, "run_rapidocr", fake_ocr)
+        monkeypatch.setattr(scan_mod, "redact", fake_redact)
+
+        map_data, audit = redact_scan_pixels(str(source), str(output), rules=[])
+
+        assert output.exists()
+        assert audit["verification"]["passed"] is True
+        polygon = map_data["occurrences"][0]["polygons"][0]
+        assert polygon[0][0] < 31
+        assert polygon[1][0] > 79
+
 
 class TestScanRedactIrreversible:
     """Test that scan redaction is properly marked irreversible."""
