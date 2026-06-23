@@ -1,4 +1,4 @@
-"""DOCX adapter: content-level redact / restore / audit for main body."""
+"""DOCX adapter: content-level redact / restore across visible OOXML parts."""
 
 from __future__ import annotations
 
@@ -63,9 +63,30 @@ def _get_run_style_props(run_elem):
 
 
 def _clear_paragraph_runs(paragraph_elem) -> None:
-    """Remove all <w:r> children from paragraph, preserving <w:pPr>."""
-    for run in paragraph_elem.findall(_tag("r")):
-        paragraph_elem.remove(run)
+    """Remove descendant runs, including runs inside hyperlinks/text boxes."""
+    for run in paragraph_elem.findall(f".//{_tag('r')}"):
+        parent = run.getparent()
+        if parent is not None:
+            parent.remove(run)
+
+
+def _is_text_part(name: str) -> bool:
+    """Return whether an OOXML package part can carry user-visible text."""
+    if name == "word/document.xml":
+        return True
+    base = name.rsplit("/", 1)[-1]
+    return name.startswith("word/") and (
+        base.startswith("header")
+        or base.startswith("footer")
+        or base in {"footnotes.xml", "endnotes.xml", "comments.xml"}
+    )
+
+
+def _paragraphs(tree) -> List[Any]:
+    """Return paragraphs in document order, including tables and text boxes."""
+    if tree.tag == _tag("p"):
+        return [tree]
+    return list(tree.findall(f".//{_tag('p')}"))
 
 
 def _make_run_elem(text: str, rpr_copy=None):
@@ -217,31 +238,24 @@ class DOCXAdapter(DocumentAdapter):
     """DOCX adapter for content-level redact / restore / audit."""
 
     def extract_text(self, path: str) -> Tuple[str, List[Dict[str, Any]]]:
-        """Extract paragraph texts with metadata."""
+        """Extract paragraph text from all supported OOXML text parts."""
         import zipfile
 
         with zipfile.ZipFile(path, "r") as zf:
-            xml_bytes = zf.read("word/document.xml")
-
-        tree = etree.fromstring(xml_bytes)
-        body = tree.find(_tag("body"))
-        if body is None:
-            return "", []
+            parts = {name: zf.read(name) for name in zf.namelist() if _is_text_part(name)}
 
         segments = []
         full_parts = []
-        para_idx = 0
-
-        for child in body:
-            if child.tag == _tag("p"):
-                text, _ = _extract_paragraph_runs_text(child)
+        for part_name, xml_bytes in parts.items():
+            tree = etree.fromstring(xml_bytes)
+            for para_idx, paragraph in enumerate(_paragraphs(tree)):
+                text, _ = _extract_paragraph_runs_text(paragraph)
                 segments.append({
                     "paragraph_index": para_idx,
                     "text": text,
-                    "part": "word/document.xml",
+                    "part": part_name,
                 })
                 full_parts.append(text)
-                para_idx += 1
 
         full_text = "\n".join(full_parts)
         return full_text, segments
@@ -261,19 +275,18 @@ class DOCXAdapter(DocumentAdapter):
         import io
         import shutil
 
-        # Read source
+        # Read source package and parse every supported text part.
         with zipfile.ZipFile(source_path, "r") as zf:
-            doc_xml = zf.read("word/document.xml")
-            other_files = {n: zf.read(n) for n in zf.namelist() if n != "word/document.xml"}
+            package_files = {n: zf.read(n) for n in zf.namelist()}
+        text_trees = {
+            name: etree.fromstring(data)
+            for name, data in package_files.items()
+            if _is_text_part(name)
+        }
 
         source_sha256 = hashlib.sha256(
             open(source_path, "rb").read()
         ).hexdigest()
-
-        tree = etree.fromstring(doc_xml)
-        body = tree.find(_tag("body"))
-        if body is None:
-            body = etree.SubElement(tree, _tag("body"))
 
         all_occurrences = []
         all_entities = []
@@ -308,102 +321,96 @@ class DOCXAdapter(DocumentAdapter):
 
             raise KeyError(f"Missing document entity: {doc_ent_id}")
 
-        para_idx = 0
-        for child in body:
-            if child.tag != _tag("p"):
-                continue
-
-            para_text, run_metas = _extract_paragraph_runs_text(child)
-            if not para_text.strip():
-                para_idx += 1
-                continue
-
-            # Call text engine on paragraph text. Engine failures must abort the
-            # whole document so we never emit a partially redacted file.
-            redacted_para_text, seg_map, seg_audit = redact_fn(
-                para_text, rules, hashlib.sha256(para_text.encode("utf-8")).hexdigest(),
-                mode, level, model_dir,
-            )
-            if profile_name is None:
-                profile_name = seg_map.get("profile")
-
-            if redacted_para_text == para_text:
-                para_idx += 1
-                continue
-
-            # Build spans from segment occurrences
-            spans_for_para = []
-            ent_lookup = {e["id"]: e for e in seg_map.get("entities", [])}
-            for occ in seg_map.get("occurrences", []):
-                ent = ent_lookup.get(occ["entity_id"])
-                if not ent:
+        for part_name, tree in text_trees.items():
+            for para_idx, child in enumerate(_paragraphs(tree)):
+                para_text, run_metas = _extract_paragraph_runs_text(child)
+                if not para_text.strip():
                     continue
-                doc_ent_id, replacement = get_doc_entity(ent, occ["engine"])
-                spans_for_para.append({
-                    "start": occ["original_start"],
-                    "end": occ["original_end"],
-                    "replacement": replacement,
-                    "entity_id": doc_ent_id,
-                    "engine": occ["engine"],
-                    "original_text": ent["original"],
-                })
 
-            # Rebuild paragraph with redactions
-            locators, rebuild_warnings = _rebuild_paragraph_with_redactions(
-                child, para_text, run_metas, spans_for_para,
-            )
+                # Call text engine on paragraph text. Engine failures must abort the
+                # whole document so we never emit a partially redacted file.
+                redacted_para_text, seg_map, seg_audit = redact_fn(
+                    para_text, rules, hashlib.sha256(para_text.encode("utf-8")).hexdigest(),
+                    mode, level, model_dir,
+                )
+                if profile_name is None:
+                    profile_name = seg_map.get("profile")
 
-            # Merge warnings
-            for w in rebuild_warnings:
-                all_warnings.append({
-                    "type": w.type,
-                    "message": w.message,
-                    "details": w.details,
-                    "paragraph_index": para_idx,
-                })
+                if redacted_para_text == para_text:
+                    continue
 
-            # Also add warnings from seg_audit (e.g. overlapped spans)
-            for w in seg_audit.get("warnings", []):
-                if isinstance(w, dict):
-                    all_warnings.append({**w, "paragraph_index": para_idx})
-                else:
+                # Build spans from segment occurrences
+                spans_for_para = []
+                ent_lookup = {e["id"]: e for e in seg_map.get("entities", [])}
+                for occ in seg_map.get("occurrences", []):
+                    ent = ent_lookup.get(occ["entity_id"])
+                    if not ent:
+                        continue
+                    doc_ent_id, replacement = get_doc_entity(ent, occ["engine"])
+                    spans_for_para.append({
+                        "start": occ["original_start"],
+                        "end": occ["original_end"],
+                        "replacement": replacement,
+                        "entity_id": doc_ent_id,
+                        "engine": occ["engine"],
+                        "original_text": ent["original"],
+                    })
+
+                # Rebuild paragraph with redactions
+                locators, rebuild_warnings = _rebuild_paragraph_with_redactions(
+                    child, para_text, run_metas, spans_for_para,
+                )
+
+                # Merge warnings
+                for w in rebuild_warnings:
                     all_warnings.append({
-                        "type": "audit_warning",
-                        "message": str(w),
+                        "type": w.type,
+                        "message": w.message,
+                        "details": w.details,
                         "paragraph_index": para_idx,
+                        "part": part_name,
                     })
 
-            # Build document-level occurrences with locator
-            for i, sp in enumerate(spans_for_para):
-                if i < len(locators):
-                    loc = locators[i]
-                    all_occurrences.append({
-                        "entity_id": sp["entity_id"],
-                        "engine": sp["engine"],
-                        "original_text": sp["original_text"],
-                        "replacement": sp["replacement"],
-                        "locator": {
-                            "type": "docx",
-                            "part": "word/document.xml",
+                # Also add warnings from seg_audit (e.g. overlapped spans)
+                for w in seg_audit.get("warnings", []):
+                    if isinstance(w, dict):
+                        all_warnings.append({**w, "paragraph_index": para_idx, "part": part_name})
+                    else:
+                        all_warnings.append({
+                            "type": "audit_warning",
+                            "message": str(w),
                             "paragraph_index": para_idx,
-                            "run_start_index": loc["run_start_index"],
-                            "run_end_index": loc["run_end_index"],
-                            "text_start": loc["text_start"],
-                            "text_end": loc["text_end"],
-                        },
-                    })
+                            "part": part_name,
+                        })
 
-            para_idx += 1
+                # Build document-level occurrences with locator
+                for i, sp in enumerate(spans_for_para):
+                    if i < len(locators):
+                        loc = locators[i]
+                        all_occurrences.append({
+                            "entity_id": sp["entity_id"],
+                            "engine": sp["engine"],
+                            "original_text": sp["original_text"],
+                            "replacement": sp["replacement"],
+                            "locator": {
+                                "type": "docx",
+                                "part": part_name,
+                                "paragraph_index": para_idx,
+                                "run_start_index": loc["run_start_index"],
+                                "run_end_index": loc["run_end_index"],
+                                "text_start": loc["text_start"],
+                                "text_end": loc["text_end"],
+                            },
+                        })
 
-        # Check for cross-paragraph entities and warn
-        # (In 003 we don't support cross-paragraph; audit warning already added by text engine if it detects)
-
-        # Write redacted DOCX
-        new_doc_xml = etree.tostring(tree, xml_declaration=True, encoding="UTF-8", standalone=True)
+        # Serialize modified text parts back into the package.
+        for part_name, tree in text_trees.items():
+            package_files[part_name] = etree.tostring(
+                tree, xml_declaration=True, encoding="UTF-8", standalone=True
+            )
 
         with zipfile.ZipFile(redacted_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("word/document.xml", new_doc_xml)
-            for name, data in other_files.items():
+            for name, data in package_files.items():
                 zf.writestr(name, data)
 
         redacted_sha256 = hashlib.sha256(
@@ -475,29 +482,30 @@ class DOCXAdapter(DocumentAdapter):
             )
 
         with zipfile.ZipFile(redacted_path, "r") as zf:
-            doc_xml = zf.read("word/document.xml")
-            other_files = {n: zf.read(n) for n in zf.namelist() if n != "word/document.xml"}
-
-        tree = etree.fromstring(doc_xml)
-        body = tree.find(_tag("body"))
-        if body is None:
-            raise ValueError("No <w:body> found in document.xml")
+            package_files = {n: zf.read(n) for n in zf.namelist()}
+        text_trees = {
+            name: etree.fromstring(data)
+            for name, data in package_files.items()
+            if _is_text_part(name)
+        }
 
         # Build entity lookup
         entity_map = {e["id"]: e["original"] for e in map_data.get("entities", [])}
 
-        # Group occurrences by paragraph_index
+        # Group occurrences by package part and paragraph index.
         from collections import defaultdict
         para_occurrences = defaultdict(list)
         for occ in map_data.get("occurrences", []):
             loc = occ.get("locator", {})
             if loc.get("type") != "docx":
                 continue
-            para_occurrences[loc["paragraph_index"]].append(occ)
+            para_occurrences[(loc.get("part", "word/document.xml"), loc["paragraph_index"])].append(occ)
 
-        # Process paragraphs
-        paragraphs = [c for c in body if c.tag == _tag("p")]
-        for para_idx, occs in para_occurrences.items():
+        for (part_name, para_idx), occs in para_occurrences.items():
+            tree = text_trees.get(part_name)
+            if tree is None:
+                continue
+            paragraphs = _paragraphs(tree)
             if para_idx >= len(paragraphs):
                 continue
             para_elem = paragraphs[para_idx]
@@ -505,12 +513,13 @@ class DOCXAdapter(DocumentAdapter):
             # Restore this paragraph
             _restore_paragraph_from_locator(para_elem, occs, entity_map)
 
-        # Write restored DOCX
-        new_doc_xml = etree.tostring(tree, xml_declaration=True, encoding="UTF-8", standalone=True)
+        for part_name, tree in text_trees.items():
+            package_files[part_name] = etree.tostring(
+                tree, xml_declaration=True, encoding="UTF-8", standalone=True
+            )
 
         with zipfile.ZipFile(restored_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.writestr("word/document.xml", new_doc_xml)
-            for name, data in other_files.items():
+            for name, data in package_files.items():
                 zf.writestr(name, data)
 
     def audit(self, path: str, map_data: dict, rules) -> dict:
@@ -538,7 +547,7 @@ class DOCXAdapter(DocumentAdapter):
             except FileNotFoundError:
                 profile = None
             if profile is not None:
-                redact_types = profile.redact_entity_types()
+                redact_types = profile.redact_entity_types(f.entity_type for f in residual)
                 residual = [f for f in residual if f.entity_type in redact_types]
 
         entities = map_data.get("entities", [])
