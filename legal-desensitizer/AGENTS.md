@@ -2,7 +2,7 @@
 
 This project builds an independent legal desensitization CLI and skill.
 
-Read `/Users/clukay/Program/lawchers-skills/docs/HANDOFF.md` before implementation.
+If the repo root contains `docs/HANDOFF.md`, read it before implementation (local dev convention; `docs/` is not tracked in git and may be absent in a fresh clone).
 
 ## Core Direction
 
