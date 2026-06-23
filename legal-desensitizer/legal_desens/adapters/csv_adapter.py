@@ -363,7 +363,7 @@ def csv_redact(
     )
     residual = scan_regex(redacted_text, rules)
     if profile is not None:
-        redact_types = profile.redact_entity_types()
+        redact_types = profile.redact_entity_types(f.entity_type for f in residual)
         residual = [f for f in residual if f.entity_type in redact_types]
 
     audit_data = {
@@ -493,7 +493,7 @@ def csv_audit(
         except FileNotFoundError:
             profile = None
         if profile is not None:
-            redact_types = profile.redact_entity_types()
+            redact_types = profile.redact_entity_types(f.entity_type for f in residual)
             residual = [f for f in residual if f.entity_type in redact_types]
 
     entities = map_data.get("entities", [])

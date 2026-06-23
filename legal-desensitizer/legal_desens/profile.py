@@ -53,10 +53,13 @@ class Profile:
             return policy.label
         return None
 
-    def redact_entity_types(self) -> set:
-        """Return set of entity_type strings that should be redacted."""
+    def redact_entity_types(self, candidates=None) -> set:
+        """Return redacted types, including unknown candidate types by default."""
         result = set()
-        for t, p in self.types.items():
+        entity_types = set(self.types)
+        if candidates is not None:
+            entity_types.update(candidates)
+        for t in entity_types:
             # Check entity_policy overrides
             if self.entity_policy:
                 if t in self.entity_policy.preserve_types:
@@ -64,7 +67,7 @@ class Profile:
                 if t in self.entity_policy.force_redact_types:
                     result.add(t)
                     continue
-            if p.action == "redact":
+            if self.should_redact(t):
                 result.add(t)
         return result
 

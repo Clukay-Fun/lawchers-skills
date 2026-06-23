@@ -611,7 +611,7 @@ class XLSXAdapter(DocumentAdapter):
             except FileNotFoundError:
                 profile = None
             if profile is not None:
-                redact_types = profile.redact_entity_types()
+                redact_types = profile.redact_entity_types(f.entity_type for f in residual)
                 residual = [f for f in residual if f.entity_type in redact_types]
 
         entities = map_data.get("entities", [])

@@ -399,13 +399,13 @@ class TestBankAccountContext:
 
     def test_money_and_bank_account_no_cross(self, rules, labor):
         """MONEY preserved, BANK_ACCOUNT redacted, no cross-contamination."""
-        text = "月工资15000元，银行账号6225880112345678。"
+        text = "月工资15000元，银行账号1234567890123456789。"
         source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
         redacted, map_data, _ = redact(text, rules, source_sha, profile=labor)
         # MONEY preserved
         assert "15000元" in redacted
         # BANK_ACCOUNT redacted (has context keyword 银行账号)
-        assert "6225880112345678" not in redacted
+        assert "1234567890123456789" not in redacted
 
     def test_bank_branch_redacted(self, rules, labor):
         text = "开户行平安银行深圳支行。"

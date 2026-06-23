@@ -338,6 +338,32 @@ class TestCLIPDFRouting:
         best_effort = [w for w in audit_data["warnings"] if w["type"] == "best_effort_notice"]
         assert len(best_effort) == 1
 
+    def test_redact_scan_pdf_preserves_pdf_format(self, tmp_path, synthetic_pdf):
+        from legal_desens.cli import main
+
+        output = tmp_path / "redacted.pdf"
+        markdown = tmp_path / "redacted.intermediate.md"
+        map_file = tmp_path / "map.json"
+        audit_file = tmp_path / "audit.json"
+
+        rc = main([
+            "redact-scan", synthetic_pdf,
+            "--ocr", "rapidocr",
+            "--regex-only",
+            "--out", str(output),
+            "--md-out", str(markdown),
+            "--map", str(map_file),
+            "--audit", str(audit_file),
+        ])
+
+        assert rc == 0
+        assert output.read_bytes().startswith(b"%PDF")
+        assert markdown.exists()
+
+        import fitz
+        with fitz.open(output) as document:
+            assert len(document) == 2
+
     def test_redact_scan_pdf_no_out_prints_stdout(self, synthetic_pdf):
         """Without --out, redact-scan with PDF prints to stdout."""
         from legal_desens.cli import main

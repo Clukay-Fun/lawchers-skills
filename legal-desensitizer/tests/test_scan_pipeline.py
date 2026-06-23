@@ -290,6 +290,34 @@ class TestCLIScanCommands:
         assert len(best_effort) == 1
 
     @requires_rapidocr
+    def test_redact_scan_cli_preserves_image_format(self, tmp_path):
+        from legal_desens.cli import main
+
+        input_path = os.path.join(FIXTURES, "sensitive.png")
+        output = tmp_path / "redacted.png"
+        markdown = tmp_path / "redacted.intermediate.md"
+        map_file = tmp_path / "map.json"
+        audit_file = tmp_path / "audit.json"
+
+        rc = main([
+            "redact-scan", input_path,
+            "--ocr", "rapidocr",
+            "--regex-only",
+            "--out", str(output),
+            "--md-out", str(markdown),
+            "--map", str(map_file),
+            "--audit", str(audit_file),
+        ])
+
+        assert rc == 0
+        assert output.read_bytes().startswith(b"\x89PNG")
+        assert markdown.exists()
+        with open(map_file, encoding="utf-8") as f:
+            map_data = json.load(f)
+        assert map_data["pipeline"] == "scan-pixel-redaction"
+        assert map_data["verification"] == "redacted-pixels"
+
+    @requires_rapidocr
     def test_redact_scan_no_out_prints_stdout(self, capsys):
         """Without --out, redact-scan prints to stdout."""
         from legal_desens.cli import main

@@ -31,6 +31,16 @@ _NER_TYPE_MAP = {
     "PER": "PERSON",
     "LOC": "LOC",  # Keep LOC for address merge; converted to ADDRESS after
     "LOCATION": "LOC",
+    "name": "PERSON",
+    "company": "ORG",
+    "government": "ORG",
+    "organization": "ORG",
+    "address": "LOC",
+    "scene": "LOC",
+    "book": "NER_MISC",
+    "game": "NER_MISC",
+    "movie": "NER_MISC",
+    "position": "NER_MISC",
 }
 
 _TIME_PATTERN = re.compile(
@@ -185,7 +195,7 @@ def _profile_aware_residual_scan(
 ) -> List[Span]:
     """Residual scan that only checks entity_types the profile marks for redaction."""
     all_findings = scan_regex(text, rules)
-    redact_types = profile.redact_entity_types()
+    redact_types = profile.redact_entity_types(f.entity_type for f in all_findings)
     return [f for f in all_findings if f.entity_type in redact_types]
 
 
@@ -255,6 +265,14 @@ def redact(
     ner_warnings: List[dict] = []
     if mode != "regex-only":
         ner_spans, ner_warnings = scan_ner_with_warnings(text, model_dir)
+        from .engine.ner_postprocess import postprocess_ner_spans
+        ner_spans, postprocess_warnings = postprocess_ner_spans(
+            ner_spans,
+            text,
+            validate_org=False,
+            merge_address_parts=False,
+        )
+        ner_warnings.extend(postprocess_warnings)
         spans.extend(ner_spans)
         _remap_ner_types(spans)
     if profile.should_redact("TIME"):
@@ -278,7 +296,7 @@ def redact(
     kept, discarded = merge_spans(spans)
 
     # Filter by profile: only redact types that profile marks as "redact"
-    redact_types = profile.redact_entity_types()
+    redact_types = profile.redact_entity_types(s.entity_type for s in kept)
     kept_for_redact = [s for s in kept if s.entity_type in redact_types]
 
     # Org abbreviation dictionary: find abbreviated org names after full names are found

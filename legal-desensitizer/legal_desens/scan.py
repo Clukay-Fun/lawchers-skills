@@ -265,6 +265,218 @@ def scan_redact(
     return redacted_text, map_data, audit_data, ocr_meta
 
 
+def redact_scan_pixels(
+    image_path: str,
+    redacted_image_path: str,
+    rules: List[Rule],
+    mode: str = "regex-only",
+    level: str = "strict",
+    model_dir: Optional[str] = None,
+    confidence_threshold: float = 0.7,
+    profile: Optional[Profile] = None,
+    allowlist: Optional[set] = None,
+    denylist: Optional[set] = None,
+) -> Tuple[dict, dict]:
+    """Irreversibly cover detected spans in an image using white OCR boxes."""
+    from PIL import Image, ImageDraw
+
+    ocr_result = run_rapidocr(image_path, confidence_threshold=confidence_threshold)
+    source_sha = _source_sha256(image_path)
+    _redacted_text, redact_map, redact_audit = redact(
+        text=ocr_result.text,
+        rules=rules,
+        source_sha256=source_sha,
+        mode=mode,
+        level=level,
+        model_dir=model_dir,
+        profile=profile,
+        allowlist=allowlist,
+        denylist=denylist,
+    )
+
+    line_ranges = []
+    offset = 0
+    for line in ocr_result.lines:
+        line_ranges.append((offset, offset + len(line.text), line))
+        offset += len(line.text) + 1
+
+    image = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+    unresolved = []
+    for occurrence in redact_map.get("occurrences", []):
+        start = occurrence["original_start"]
+        end = occurrence["original_end"]
+        matched = False
+        polygons = []
+        for line_start, line_end, line in line_ranges:
+            overlap_start = max(start, line_start)
+            overlap_end = min(end, line_end)
+            if overlap_start >= overlap_end or not line.text:
+                continue
+            xs = [point[0] for point in line.box]
+            ys = [point[1] for point in line.box]
+            left, right = min(xs), max(xs)
+            top, bottom = min(ys), max(ys)
+            local_start = overlap_start - line_start
+            local_end = overlap_end - line_start
+            span_left = left + (right - left) * local_start / len(line.text)
+            span_right = left + (right - left) * local_end / len(line.text)
+            polygon = [
+                [span_left, top], [span_right, top],
+                [span_right, bottom], [span_left, bottom],
+            ]
+            draw.polygon([(p[0], p[1]) for p in polygon], fill="white")
+            polygons.append(polygon)
+            matched = True
+        if not matched:
+            unresolved.append(occurrence)
+        else:
+            occurrence["polygons"] = polygons
+
+    if unresolved:
+        raise RuntimeError(
+            f"Unable to map {len(unresolved)} detected span(s) to OCR coordinates"
+        )
+
+    image.save(redacted_image_path)
+    verification_ocr = run_rapidocr(
+        redacted_image_path, confidence_threshold=confidence_threshold
+    )
+    originals = {
+        entity["original"] for entity in redact_map.get("entities", []) if entity.get("original")
+    }
+    residual_originals = [value for value in originals if value in verification_ocr.text]
+    if residual_originals:
+        Path(redacted_image_path).unlink(missing_ok=True)
+        raise RuntimeError("Sensitive text remains visible after pixel redaction")
+
+    redacted_sha = _source_sha256(redacted_image_path)
+    map_data = {
+        **redact_map,
+        "pipeline": "scan-pixel-redaction",
+        "verification": "redacted-pixels",
+        "restore_supported": False,
+        "best_effort": True,
+        "source_file": Path(image_path).name,
+        "redacted_file": Path(redacted_image_path).name,
+        "source_sha256": source_sha,
+        "redacted_sha256": redacted_sha,
+        "ocr_engine": "rapidocr",
+    }
+    warnings = list(redact_audit.get("warnings", [])) + list(ocr_result.warnings)
+    warnings.append({
+        "type": "best_effort_notice",
+        "message": "OCR-based pixel redaction is irreversible and requires human review.",
+    })
+    audit_data = {
+        **redact_audit,
+        "pipeline": "scan-pixel-redaction",
+        "verification": {"type": "redacted-pixels", "passed": True},
+        "restore_supported": False,
+        "best_effort": True,
+        "warnings": warnings,
+    }
+    return map_data, audit_data
+
+
+def _write_redacted_scan_pdf(page_images: List[str], output_path: str, dpi: int = 200) -> None:
+    """Assemble redacted page images into an image-only PDF."""
+    _check_fitz_available()
+    import fitz
+
+    output = fitz.open()
+    try:
+        for image_path in page_images:
+            from PIL import Image
+
+            with Image.open(image_path) as image:
+                width_pt = image.width * 72.0 / dpi
+                height_pt = image.height * 72.0 / dpi
+            page = output.new_page(width=width_pt, height=height_pt)
+            page.insert_image(page.rect, filename=image_path)
+        output.save(output_path, deflate=True, garbage=3)
+    finally:
+        output.close()
+
+
+def scan_redact_preserve_format(
+    source_path: str,
+    output_path: str,
+    markdown_path: str,
+    rules: List[Rule],
+    ocr_engine: str = "rapidocr",
+    mode: str = "regex-only",
+    level: str = "strict",
+    model_dir: Optional[str] = None,
+    confidence_threshold: float = 0.7,
+    profile: Optional[Profile] = None,
+    allowlist: Optional[set] = None,
+    denylist: Optional[set] = None,
+) -> Tuple[dict, dict, dict]:
+    """Produce redacted Markdown plus a white-boxed file in the source format."""
+    source = Path(source_path)
+    output = Path(output_path)
+    markdown = Path(markdown_path)
+    image_extensions = {".png", ".jpg", ".jpeg", ".tiff", ".bmp"}
+
+    if source.suffix.lower() != output.suffix.lower():
+        raise ValueError("Format-preserving scan output must use the same extension as the input")
+    if source.suffix.lower() not in image_extensions | {".pdf"}:
+        raise ValueError(f"Unsupported format-preserving scan input: {source.suffix.lower()}")
+
+    redacted_markdown, map_data, audit_data, ocr_meta = scan_redact(
+        image_path=str(source),
+        rules=rules,
+        ocr_engine=ocr_engine,
+        mode=mode,
+        level=level,
+        model_dir=model_dir,
+        confidence_threshold=confidence_threshold,
+        profile=profile,
+        allowlist=allowlist,
+        denylist=denylist,
+    )
+    markdown.write_text(redacted_markdown, encoding="utf-8")
+
+    if source.suffix.lower() in image_extensions:
+        redact_scan_pixels(
+            str(source), str(output), rules, mode=mode, level=level,
+            model_dir=model_dir, confidence_threshold=confidence_threshold,
+            profile=profile, allowlist=allowlist, denylist=denylist,
+        )
+    else:
+        page_images, _total_pages = _render_pdf_pages(str(source))
+        temp_redacted_dir = Path(tempfile.mkdtemp(prefix="legal_desens_redacted_pdf_"))
+        redacted_pages: List[str] = []
+        try:
+            for index, page_image in enumerate(page_images, start=1):
+                redacted_page = temp_redacted_dir / f"page_{index:04d}.png"
+                redact_scan_pixels(
+                    page_image, str(redacted_page), rules, mode=mode, level=level,
+                    model_dir=model_dir, confidence_threshold=confidence_threshold,
+                    profile=profile, allowlist=allowlist, denylist=denylist,
+                )
+                redacted_pages.append(str(redacted_page))
+            _write_redacted_scan_pdf(redacted_pages, str(output))
+        finally:
+            _cleanup_pdf_temp_pages(page_images)
+            shutil.rmtree(temp_redacted_dir, ignore_errors=True)
+
+    map_data.update({
+        "pipeline": "scan-pixel-redaction",
+        "verification": "redacted-pixels",
+        "redacted_file": output.name,
+        "redacted_sha256": _source_sha256(str(output)),
+        "intermediate_markdown_file": markdown.name,
+        "intermediate_markdown_sha256": _source_sha256(str(markdown)),
+    })
+    audit_data.update({
+        "pipeline": "scan-pixel-redaction",
+        "verification": {"type": "redacted-pixels", "passed": True},
+    })
+    return map_data, audit_data, ocr_meta
+
+
 def _scan_redact_pdf(
     pdf_path: str,
     rules: List[Rule],
