@@ -28,7 +28,7 @@ def audit(
     # Residual scan — profile-aware
     all_residual = scan_regex(redacted_text, rules)
     if profile is not None:
-        redact_types = profile.redact_entity_types()
+        redact_types = profile.redact_entity_types(f.entity_type for f in all_residual)
         residual = [f for f in all_residual if f.entity_type in redact_types]
     else:
         residual = all_residual

@@ -27,6 +27,15 @@
     "priority": 100
   },
   {
+    "id": "passport_cn",
+    "name": "中国护照",
+    "entity_type": "PASSPORT",
+    "label_prefix": "护照",
+    "pattern": "(?<![A-Za-z0-9])[A-Z][0-9]{8}(?![A-Za-z0-9])|(?<![A-Za-z0-9])[EeGgSsDdMmHhPp]\\d{8}(?![A-Za-z0-9])",
+    "enabled": true,
+    "priority": 100
+  },
+  {
     "id": "email",
     "name": "电子邮箱",
     "entity_type": "EMAIL",
@@ -54,6 +63,15 @@
     "priority": 100
   },
   {
+    "id": "execution_no",
+    "name": "执行依据编号",
+    "entity_type": "EXECUTION_NO",
+    "label_prefix": "执行依据",
+    "pattern": "(?:执|执行)(?:字|案件)?[\\(（]?\\d{4}[\\)）]?[\\u4e00-\\u9fff]?\\d+号?",
+    "enabled": true,
+    "priority": 100
+  },
+  {
     "id": "org_code",
     "name": "统一社会信用代码",
     "entity_type": "ORG_CODE",
@@ -72,6 +90,15 @@
     "priority": 80
   },
   {
+    "id": "bank_card_cn",
+    "name": "银行卡号",
+    "entity_type": "BANK_CARD",
+    "label_prefix": "银行卡",
+    "pattern": "(?<![0-9])(?:6[0-9]{15,18}|4[0-9]{12,15}|5[1-5][0-9]{14}|3[47][0-9]{13}|3(?:0[0-5]|[68][0-9])[0-9]{11})(?![0-9])",
+    "enabled": true,
+    "priority": 90
+  },
+  {
     "id": "bank_branch_cn",
     "name": "银行开户行/网点",
     "entity_type": "BANK_BRANCH",
@@ -86,6 +113,42 @@
     "entity_type": "MONEY",
     "label_prefix": "金额",
     "pattern": "(?<![A-Za-z0-9])(?:(?:人民币\\s*)?(?:[¥￥]\\s*)?(?:[0-9０-９]+(?:[.,，][0-9０-９]+)?|[零〇一二三四五六七八九十百千万亿壹贰叁肆伍陆柒捌玖拾佰仟萬億两]+)\\s*(?:亿元|万元|元|圆|块)(?:整)?|[¥￥]\\s*[0-9０-９]+(?:[.,，][0-9０-９]+)?)(?![A-Za-z0-9])",
+    "enabled": true,
+    "priority": 100
+  },
+  {
+    "id": "date_cn",
+    "name": "中文日期",
+    "entity_type": "DATE",
+    "label_prefix": "日期",
+    "pattern": "(?:[0-9]{4}年)?(?:[0-9]{1,2}月)(?:[0-9]{1,2}[日号])|(?:[0-9]{4}[-/][0-9]{1,2}[-/][0-9]{1,2})",
+    "enabled": false,
+    "priority": 50
+  },
+  {
+    "id": "plate_cn",
+    "name": "车牌号",
+    "entity_type": "PLATE",
+    "label_prefix": "车牌",
+    "pattern": "(?:[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤川青藏琼宁][A-HJ-NP-Z][A-HJ-NP-Z0-9]{4,5}[A-HJ-NP-Z0-9挂学警港澳])",
+    "enabled": true,
+    "priority": 100
+  },
+  {
+    "id": "property_cert",
+    "name": "不动产权证号",
+    "entity_type": "PROPERTY_CERT",
+    "label_prefix": "不动产权证",
+    "pattern": "(?:[（(]?[\\u4e00-\\u9fff]{1,10}[)）]?\\s*(?:不动产权?|房权证|土地证)\\s*(?:第|字第)?\\s*[A-Za-z0-9\\-－—]+号)",
+    "enabled": true,
+    "priority": 100
+  },
+  {
+    "id": "api_token",
+    "name": "API Token/密钥",
+    "entity_type": "API_TOKEN",
+    "label_prefix": "密钥",
+    "pattern": "(?<![A-Za-z0-9])(?:sk|ak|token|key|secret|password)[_\\-]?[A-Za-z0-9]{20,}(?![A-Za-z0-9])",
     "enabled": true,
     "priority": 100
   }

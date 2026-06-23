@@ -30,6 +30,24 @@ MAX_CONTENT_TOKENS = MAX_MODEL_TOKENS - SPECIAL_TOKEN_COUNT
 CHUNK_OVERLAP_TOKENS = 64
 SELF_TEST_TEXT = "张三在北京市海源科技有限公司工作。"
 
+_CANONICAL_ENTITY_TYPES = {
+    "name": "PER",
+    "company": "ORG",
+    "government": "ORG",
+    "organization": "ORG",
+    "address": "LOC",
+    "scene": "LOC",
+    "book": "NER_MISC",
+    "game": "NER_MISC",
+    "movie": "NER_MISC",
+    "position": "NER_MISC",
+}
+
+
+def _canonical_entity_type(entity_type: str) -> str:
+    """Normalize model-specific labels for all NER consumers."""
+    return _CANONICAL_ENTITY_TYPES.get(entity_type, entity_type)
+
 
 def _resolve_model_dir(model_dir: Optional[str] = None) -> Path:
     """Resolve model directory with priority chain (006 amendment).
@@ -540,7 +558,7 @@ class NEREngine:
             )
 
             spans.append(Span(
-                entity_type=ent.entity_type,
+                entity_type=_canonical_entity_type(ent.entity_type),
                 start=char_start,
                 end=char_end,
                 text=span_text,
