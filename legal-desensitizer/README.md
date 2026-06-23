@@ -27,23 +27,50 @@
 
 ## 可直接发给 Agent 的安装提示词
 
+把下面整段连同本仓库链接发给任意 agent，它即可看懂 skill、完成安装（含扩展 NER 模型）并正常使用：
+
 ```text
-你负责安装并验证 legal-desensitizer skill。进入项目目录后不要只执行 pip install，也不要在 ner-inspect 失败后直接放弃。请按顺序执行：
+请安装并学会使用一个本地法律文档脱敏 skill：legal-desensitizer。
+源码（含说明文档）：https://github.com/Clukay-Fun/lawchers-skills/tree/main/legal-desensitizer
 
-1. cd /Users/clukay/Program/lawchers-skills/legal-desensitizer
-2. bash scripts/install_with_model.sh
-   - 该脚本已内置 ModelScope NER 模型包 URL 和 SHA-256
-   - 会安装 CLI、下载模型、校验 SHA-256、安装模型并运行 ner-inspect
-3. 如果 legal-desens 不在 PATH，使用 python3 -m legal_desens.cli 等价调用
-4. 执行 python3 -m legal_desens.cli ner-inspect，确认输出里 self_test.passed=true
-5. 执行 python3 -m pytest tests/test_ner_engine.py tests/test_batch_redact_case.py -q
-6. 汇报安装路径、ner-inspect 的 self_test 结果、测试结果；不要粘贴真实案件原文或 map 内容
+== 它是什么 ==
+通用案件材料脱敏 CLI/skill：对 .txt/.md/.csv/.docx/.xlsx 做【可逆】脱敏（位置映射，非字符串替换；
+SHA-256 防错配），图片/扫描件走【不可逆】OCR 派生。脱/留由场景 profile 控制：labor（默认，已实战
+验收，保留时间/金额）、strict（全脱）。人名/机构/地址等实体识别可选接入本地 NER（ONNX）模型，
+全程本机运行、不调云 API。命令名：legal-desens。
 
-如果下载慢，优先使用：
-LEGAL_DESENS_WHEELHOUSE=dist/wheelhouse-macos-arm64 bash scripts/install_with_model.sh
+== 第一步：读文档（先读再动手）==
+1. README.md —— 安装/使用/安全约定
+2. SKILL.md —— 决策表与安全规则（处理真实文件前必读）
+3. AGENTS.md / CLAUDE.md —— 调用规范与边界
 
-如果用户明确只要 regex-only，才允许：
-LEGAL_DESENS_SKIP_MODEL=1 bash scripts/install_with_model.sh
+== 第二步：安装（含扩展 NER 模型）==
+git clone https://github.com/Clukay-Fun/lawchers-skills.git
+cd lawchers-skills/legal-desensitizer
+bash scripts/install_with_model.sh
+  # 脚本会：pip install . → 从 ModelScope 下载 NER ONNX 模型包 → 校验 SHA-256 → 安装模型 → 跑 ner-inspect
+  # 下载慢可挂国内镜像/代理后重试；或用本地 wheelhouse：
+  #   LEGAL_DESENS_WHEELHOUSE=dist/wheelhouse-<platform> bash scripts/install_with_model.sh
+
+可选扩展能力（按需 opt-in，不装不影响核心 regex 脱敏）：
+  pip install ".[ocr]"   # 图片/扫描件 OCR
+  pip install ".[pdf]"   # 本地 PDF 支持（PyMuPDF，AGPL，仅本地自用）
+
+== 第三步：验证 ==
+python3 -m legal_desens.cli ner-inspect        # 必须看到 self_test.passed=true，NER 才算就绪
+python3 -m pytest -q                            # 自测通过再处理真实文件
+  # legal-desens 不在 PATH 时，统一用 python3 -m legal_desens.cli 等价调用
+
+== 第四步：使用 ==
+legal-desens batch-redact-case --input <材料目录> --out <输出目录> --profile labor
+  # 输出：final_redacted_md/ + SENSITIVE_REDACTION_REPORT_DO_NOT_UPLOAD.md + run_manifest.json
+  # 全脱场景用 --profile strict；单文件可用 legal-desens redact / restore / audit（见 SKILL.md）
+
+== 规矩 ==
+- ner-inspect 没过别直接用，也别静默降级；只有用户明确要 regex-only 才加
+  LEGAL_DESENS_SKIP_MODEL=1 bash scripts/install_with_model.sh
+- 不要把真实案件原文、map.json、脱敏报告内容回贴出来或上传。
+- 不做任何 git 提交操作。
 ```
 
 ---
@@ -251,17 +278,17 @@ labels.json 或 config.json 内含 id2label/label2id
 
 如需自托管，也可以放到对象存储；下载链接和 SHA-256 应同步记录在 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
 
-### 本地导出开源模型
+### 本地导出兼容模型
 
-用自带脚本把 HuggingFace 上的中文 NER 模型导出成可用目录（示例为 Apache-2.0 候选）：
+如需自行导出，可以用自带脚本把 HuggingFace 上的中文 NER 模型导出成兼容目录。当前推荐仍是直接使用上面的 ModelScope 包；下面只用于开发/替换模型时验证：
 
 ```bash
 pip install ".[dev]" transformers torch onnx     # 仅导出时需要
 python scripts/export_hf_ner_onnx.py \
-  --hf-model shibing624/bert4ner-base-chinese \
-  --output-dir ~/ner-bert4ner
-legal-desens ner-inspect --model-dir ~/ner-bert4ner          # 成功 = NER 可用
-legal-desens redact input.txt --model-dir ~/ner-bert4ner --out ... --map ... --audit ...
+  --hf-model uer/roberta-base-finetuned-cluener2020-chinese \
+  --output-dir ~/ner-cluener
+legal-desens ner-inspect --model-dir ~/ner-cluener          # 成功 = NER 可用
+legal-desens redact input.txt --model-dir ~/ner-cluener --out ... --map ... --audit ...
 ```
 
 候选模型的 license、训练数据与已知局限见 [`references/optional-ner-models.md`](references/optional-ner-models.md)。

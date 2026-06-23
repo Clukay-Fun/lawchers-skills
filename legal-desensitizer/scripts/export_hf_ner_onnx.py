@@ -10,8 +10,8 @@ Produces a directory compatible with `legal-desens --model-dir`:
 
 Usage:
     python scripts/export_hf_ner_onnx.py \
-        --hf-model shibing624/bert4ner-base-chinese \
-        --output-dir ~/.legal-desens/models/bert4ner-base-chinese
+        --hf-model uer/roberta-base-finetuned-cluener2020-chinese \
+        --output-dir ~/.legal-desens/models/cluener-roberta
 
     # Or from a local directory:
     python scripts/export_hf_ner_onnx.py \
@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--hf-model",
         required=True,
-        help="HuggingFace model name or local path (e.g. shibing624/bert4ner-base-chinese)",
+        help="HuggingFace model name or local path (e.g. uer/roberta-base-finetuned-cluener2020-chinese)",
     )
     parser.add_argument(
         "--output-dir",

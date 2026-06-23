@@ -1,6 +1,6 @@
 # Claude Code Notes
 
-Follow the repository handoff rules in `/Users/clukay/Program/lawchers-skills/docs/HANDOFF.md`.
+If the repo root contains `docs/HANDOFF.md`, follow its handoff rules first (local dev convention; the `docs/` directory is not tracked in git, so it may be absent in a fresh clone).
 
 ## Constraints
 
