@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -26,6 +27,10 @@ class OCRResult:
 
 CONFIDENCE_THRESHOLD = 0.7
 
+# Singleton RapidOCR instance
+_rapidocr_instance = None
+_rapidocr_lock = threading.Lock()
+
 
 def _check_rapidocr_available() -> None:
     """Raise clear error if rapidocr_onnxruntime is not installed."""
@@ -37,6 +42,18 @@ def _check_rapidocr_available() -> None:
             "  pip install legal-desens[ocr]\n"
             "This will install rapidocr_onnxruntime (lightweight, ONNX-based)."
         )
+
+
+def get_rapidocr_instance():
+    """Get or create singleton RapidOCR instance."""
+    global _rapidocr_instance
+    if _rapidocr_instance is None:
+        with _rapidocr_lock:
+            if _rapidocr_instance is None:
+                _check_rapidocr_available()
+                from rapidocr_onnxruntime import RapidOCR
+                _rapidocr_instance = RapidOCR()
+    return _rapidocr_instance
 
 
 def _check_docling_available() -> None:
@@ -51,7 +68,11 @@ def _check_docling_available() -> None:
         )
 
 
-def run_rapidocr(image_path: str, confidence_threshold: float = CONFIDENCE_THRESHOLD) -> OCRResult:
+def run_rapidocr(
+    image_path: str,
+    confidence_threshold: float = CONFIDENCE_THRESHOLD,
+    engine=None,
+) -> OCRResult:
     """Run RapidOCR on an image file.
 
     Args:
@@ -61,11 +82,8 @@ def run_rapidocr(image_path: str, confidence_threshold: float = CONFIDENCE_THRES
     Returns:
         OCRResult with concatenated text, per-line details, and low-confidence warnings.
     """
-    _check_rapidocr_available()
-
-    from rapidocr_onnxruntime import RapidOCR
-
-    engine = RapidOCR()
+    if engine is None:
+        engine = get_rapidocr_instance()
     result, _elapsed = engine(str(image_path))
 
     if result is None:

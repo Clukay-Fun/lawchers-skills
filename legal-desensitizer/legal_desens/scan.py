@@ -7,18 +7,109 @@ It is NOT reversible — map marks pipeline:scan / verification:irreversible.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import re
 import shutil
 import tempfile
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .engine.ocr import OCRResult, run_rapidocr
+from .pipeline_diag import PipelineDiagnostics
 from .profile import Profile
 from .redact import redact
 from .rules import Rule
+
+
+def _run_rapidocr_compatible(
+    image_path: str,
+    confidence_threshold: float,
+    engine,
+) -> OCRResult:
+    """Call run_rapidocr with a shared engine when the active implementation accepts it."""
+    try:
+        parameters = inspect.signature(run_rapidocr).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "engine" in parameters:
+        return run_rapidocr(
+            image_path,
+            confidence_threshold=confidence_threshold,
+            engine=engine,
+        )
+    return run_rapidocr(image_path, confidence_threshold=confidence_threshold)
+
+
+class ScanPipelineContext:
+    """Per-command runtime shared by every page in a scan operation."""
+
+    def __init__(self, mode: str, model_dir: Optional[str] = None):
+        self.mode = mode
+        self.model_dir = model_dir
+        self.diagnostics = PipelineDiagnostics()
+        self._ocr_engine = None
+        self._ner_engine = None
+
+    def record_render(self, page_count: int) -> None:
+        self.diagnostics.record_render(page_count)
+
+    def run_ocr(
+        self,
+        image_path: str,
+        confidence_threshold: float,
+        *,
+        page: Optional[int] = None,
+        verification: bool = False,
+    ) -> OCRResult:
+        if self._ocr_engine is None:
+            from .engine.ocr import get_rapidocr_instance
+
+            self._ocr_engine = get_rapidocr_instance()
+            self.diagnostics.record_rapidocr_instance()
+        started = self.diagnostics.start_stage(
+            "verification_ocr" if verification else "original_ocr",
+            page,
+        )
+        try:
+            return _run_rapidocr_compatible(
+                image_path,
+                confidence_threshold,
+                self._ocr_engine,
+            )
+        finally:
+            self.diagnostics.record_ocr(is_verification=verification)
+            self.diagnostics.end_stage(
+                "verification_ocr" if verification else "original_ocr",
+                started,
+                page,
+            )
+
+    def redact_text(self, *, page: Optional[int] = None, **kwargs):
+        if self.mode != "regex-only" and self._ner_engine is None:
+            from .engine.ner import get_ner_engine_instance
+
+            self._ner_engine = get_ner_engine_instance(self.model_dir)
+            self.diagnostics.record_ner_instance()
+            self.diagnostics.record_onnx_session()
+        started = self.diagnostics.start_stage("redact", page)
+        try:
+            return redact(ner_engine=self._ner_engine, **kwargs)
+        finally:
+            self.diagnostics.record_redact()
+            self.diagnostics.end_stage("redact", started, page)
+
+
+@dataclass
+class PageScanResult:
+    page: int
+    image_path: str
+    ocr_result: OCRResult
+    redacted_text: str
+    map_data: dict
+    audit_data: dict
 
 
 def _source_sha256(path: str) -> str:
@@ -122,6 +213,46 @@ def _manual_review_warnings(text: str) -> List[dict]:
     return warnings
 
 
+def _scan_page(
+    image_path: str,
+    page: int,
+    source_sha: str,
+    rules: List[Rule],
+    context: ScanPipelineContext,
+    level: str,
+    confidence_threshold: float,
+    profile: Optional[Profile],
+    allowlist: Optional[set],
+    denylist: Optional[set],
+) -> PageScanResult:
+    """OCR and redact one source page exactly once."""
+    ocr_result = context.run_ocr(
+        image_path,
+        confidence_threshold,
+        page=page,
+    )
+    redacted_text, map_data, audit_data = context.redact_text(
+        page=page,
+        text=ocr_result.text,
+        rules=rules,
+        source_sha256=source_sha,
+        mode=context.mode,
+        level=level,
+        model_dir=context.model_dir,
+        profile=profile,
+        allowlist=allowlist,
+        denylist=denylist,
+    )
+    return PageScanResult(
+        page=page,
+        image_path=image_path,
+        ocr_result=ocr_result,
+        redacted_text=redacted_text,
+        map_data=map_data,
+        audit_data=audit_data,
+    )
+
+
 def scan_redact(
     image_path: str,
     rules: List[Rule],
@@ -133,6 +264,8 @@ def scan_redact(
     profile: Optional[Profile] = None,
     allowlist: Optional[set] = None,
     denylist: Optional[set] = None,
+    context: Optional[ScanPipelineContext] = None,
+    page_results_out: Optional[List[PageScanResult]] = None,
 ) -> Tuple[str, dict, dict, dict]:
     """Full irreversible scan pipeline: image/PDF → OCR → redact → derivative.
 
@@ -162,6 +295,7 @@ def scan_redact(
             "Install with: pip install legal-desens[ocr]"
         )
 
+    context = context or ScanPipelineContext(mode=mode, model_dir=model_dir)
     ext = Path(image_path).suffix.lower()
 
     if ext == ".pdf":
@@ -176,25 +310,30 @@ def scan_redact(
             profile=profile,
             allowlist=allowlist,
             denylist=denylist,
+            context=context,
+            page_results_out=page_results_out,
         )
 
     source_sha = _source_sha256(image_path)
 
-    # Step 1: OCR
-    ocr_result = run_rapidocr(image_path, confidence_threshold=confidence_threshold)
-
-    # Step 2: Redact the OCR text
-    redacted_text, redact_map, redact_audit = redact(
-        text=ocr_result.text,
-        rules=rules,
-        source_sha256=source_sha,
-        mode=mode,
-        level=level,
-        model_dir=model_dir,
-        profile=profile,
-        allowlist=allowlist,
-        denylist=denylist,
+    page_result = _scan_page(
+        image_path,
+        1,
+        source_sha,
+        rules,
+        context,
+        level,
+        confidence_threshold,
+        profile,
+        allowlist,
+        denylist,
     )
+    if page_results_out is not None:
+        page_results_out.append(page_result)
+    ocr_result = page_result.ocr_result
+    redacted_text = page_result.redacted_text
+    redact_map = page_result.map_data
+    redact_audit = page_result.audit_data
 
     # Step 3: Build irreversible map
     redacted_sha = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
@@ -253,6 +392,7 @@ def scan_redact(
             "confidence_threshold": confidence_threshold,
         },
         "warnings": warnings,
+        "pipeline_diagnostics": context.diagnostics.to_dict(),
     }
 
     ocr_meta = {
@@ -263,6 +403,115 @@ def scan_redact(
     }
 
     return redacted_text, map_data, audit_data, ocr_meta
+
+
+def _line_span_polygon(line, start: int, end: int, padding_chars: float = 0.0):
+    """Approximate a character span inside a four-point OCR line box."""
+    if not line.text or len(line.box) != 4:
+        return None
+    padded_start = max(0.0, start - padding_chars)
+    padded_end = min(float(len(line.text)), end + padding_chars)
+    start_ratio = padded_start / len(line.text)
+    end_ratio = padded_end / len(line.text)
+    top_left, top_right, bottom_right, bottom_left = line.box
+
+    def interpolate(left_point, right_point, ratio):
+        return [
+            left_point[0] + (right_point[0] - left_point[0]) * ratio,
+            left_point[1] + (right_point[1] - left_point[1]) * ratio,
+        ]
+
+    return [
+        interpolate(top_left, top_right, start_ratio),
+        interpolate(top_left, top_right, end_ratio),
+        interpolate(bottom_left, bottom_right, end_ratio),
+        interpolate(bottom_left, bottom_right, start_ratio),
+    ]
+
+
+def _polygons_intersect(first, second) -> bool:
+    def bounds(polygon):
+        xs = [point[0] for point in polygon]
+        ys = [point[1] for point in polygon]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    a_left, a_top, a_right, a_bottom = bounds(first)
+    b_left, b_top, b_right, b_bottom = bounds(second)
+    return not (
+        a_right < b_left
+        or b_right < a_left
+        or a_bottom < b_top
+        or b_bottom < a_top
+    )
+
+
+def _expand_polygon(polygon):
+    """Conservatively expand a failed mask for one bounded retry."""
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+    left, right = min(xs), max(xs)
+    top, bottom = min(ys), max(ys)
+    x_pad = max(3.0, (right - left) * 0.25)
+    y_pad = max(2.0, (bottom - top) * 0.15)
+    return [
+        [left - x_pad, top - y_pad],
+        [right + x_pad, top - y_pad],
+        [right + x_pad, bottom + y_pad],
+        [left - x_pad, bottom + y_pad],
+    ]
+
+
+def _classify_pixel_residuals(
+    verification_ocr: OCRResult,
+    redact_map: dict,
+    page_number: int,
+) -> List[dict]:
+    """Classify residual entities without copying sensitive text into audit."""
+    occurrences_by_entity = {}
+    for occurrence in redact_map.get("occurrences", []):
+        occurrences_by_entity.setdefault(occurrence.get("entity_id"), []).append(occurrence)
+
+    failures = []
+    for entity in redact_map.get("entities", []):
+        original = entity.get("original")
+        entity_id = entity.get("id") or entity.get("entity_id")
+        if not original or original not in verification_ocr.text:
+            continue
+
+        mask_polygons = [
+            polygon
+            for occurrence in occurrences_by_entity.get(entity_id, [])
+            for polygon in occurrence.get("polygons", [])
+        ]
+        intersects_mask = False
+        for line in verification_ocr.lines:
+            search_start = 0
+            while True:
+                local_start = line.text.find(original, search_start)
+                if local_start < 0:
+                    break
+                residual_polygon = _line_span_polygon(
+                    line,
+                    local_start,
+                    local_start + len(original),
+                )
+                if residual_polygon and any(
+                    _polygons_intersect(residual_polygon, mask)
+                    for mask in mask_polygons
+                ):
+                    intersects_mask = True
+                    break
+                search_start = local_start + 1
+            if intersects_mask:
+                break
+
+        failures.append({
+            "page": page_number,
+            "entity_id": entity_id,
+            "entity_type": entity.get("entity_type", "UNKNOWN"),
+            "category": "pixel_undercoverage" if intersects_mask else "unmapped_residual",
+        })
+    return failures
 
 
 def redact_scan_pixels(
@@ -276,23 +525,31 @@ def redact_scan_pixels(
     profile: Optional[Profile] = None,
     allowlist: Optional[set] = None,
     denylist: Optional[set] = None,
+    context: Optional[ScanPipelineContext] = None,
+    page_result: Optional[PageScanResult] = None,
+    page_number: int = 1,
 ) -> Tuple[dict, dict]:
     """Irreversibly cover detected spans in an image using white OCR boxes."""
     from PIL import Image, ImageDraw
 
-    ocr_result = run_rapidocr(image_path, confidence_threshold=confidence_threshold)
+    context = context or ScanPipelineContext(mode=mode, model_dir=model_dir)
     source_sha = _source_sha256(image_path)
-    _redacted_text, redact_map, redact_audit = redact(
-        text=ocr_result.text,
-        rules=rules,
-        source_sha256=source_sha,
-        mode=mode,
-        level=level,
-        model_dir=model_dir,
-        profile=profile,
-        allowlist=allowlist,
-        denylist=denylist,
-    )
+    if page_result is None:
+        page_result = _scan_page(
+            image_path,
+            page_number,
+            source_sha,
+            rules,
+            context,
+            level,
+            confidence_threshold,
+            profile,
+            allowlist,
+            denylist,
+        )
+    ocr_result = page_result.ocr_result
+    redact_map = page_result.map_data
+    redact_audit = page_result.audit_data
 
     line_ranges = []
     offset = 0
@@ -316,30 +573,14 @@ def redact_scan_pixels(
             local_start = overlap_start - line_start
             local_end = overlap_end - line_start
 
-            # RapidOCR exposes a quadrilateral for the whole recognized line,
-            # not per-character boxes. Character widths are not uniform, so a
-            # strict proportional slice can leave the edges of short NER spans
-            # visible. Expand by one estimated character on each side and
-            # interpolate along the original (possibly skewed) line box.
-            padded_start = max(0, local_start - 1)
-            padded_end = min(len(line.text), local_end + 1)
-            start_ratio = padded_start / len(line.text)
-            end_ratio = padded_end / len(line.text)
-
-            top_left, top_right, bottom_right, bottom_left = line.box
-
-            def interpolate(left_point, right_point, ratio):
-                return [
-                    left_point[0] + (right_point[0] - left_point[0]) * ratio,
-                    left_point[1] + (right_point[1] - left_point[1]) * ratio,
-                ]
-
-            polygon = [
-                interpolate(top_left, top_right, start_ratio),
-                interpolate(top_left, top_right, end_ratio),
-                interpolate(bottom_left, bottom_right, end_ratio),
-                interpolate(bottom_left, bottom_right, start_ratio),
-            ]
+            polygon = _line_span_polygon(
+                line,
+                local_start,
+                local_end,
+                padding_chars=1.0,
+            )
+            if polygon is None:
+                continue
             draw.polygon([(p[0], p[1]) for p in polygon], fill="white")
             polygons.append(polygon)
             matched = True
@@ -348,22 +589,66 @@ def redact_scan_pixels(
         else:
             occurrence["polygons"] = polygons
 
-    if unresolved:
-        raise RuntimeError(
-            f"Unable to map {len(unresolved)} detected span(s) to OCR coordinates"
-        )
-
     image.save(redacted_image_path)
-    verification_ocr = run_rapidocr(
-        redacted_image_path, confidence_threshold=confidence_threshold
+    verification_ocr = context.run_ocr(
+        redacted_image_path,
+        confidence_threshold,
+        page=page_number,
+        verification=True,
     )
-    originals = {
-        entity["original"] for entity in redact_map.get("entities", []) if entity.get("original")
+    failures = _classify_pixel_residuals(
+        verification_ocr,
+        redact_map,
+        page_number,
+    )
+    entity_types = {
+        (entity.get("id") or entity.get("entity_id")): entity.get("entity_type", "UNKNOWN")
+        for entity in redact_map.get("entities", [])
     }
-    residual_originals = [value for value in originals if value in verification_ocr.text]
-    if residual_originals:
-        Path(redacted_image_path).unlink(missing_ok=True)
-        raise RuntimeError("Sensitive text remains visible after pixel redaction")
+    for occurrence in unresolved:
+        failures.append({
+            "page": page_number,
+            "entity_id": occurrence.get("entity_id"),
+            "entity_type": entity_types.get(occurrence.get("entity_id"), "UNKNOWN"),
+            "category": "coordinate_mapping_failed",
+        })
+
+    retry_attempted = False
+    retry_entity_ids = {
+        failure["entity_id"]
+        for failure in failures
+        if failure["category"] == "pixel_undercoverage"
+    }
+    if retry_entity_ids:
+        retry_attempted = True
+        for occurrence in redact_map.get("occurrences", []):
+            if occurrence.get("entity_id") not in retry_entity_ids:
+                continue
+            expanded_polygons = []
+            for polygon in occurrence.get("polygons", []):
+                expanded = _expand_polygon(polygon)
+                draw.polygon([(point[0], point[1]) for point in expanded], fill="white")
+                expanded_polygons.append(expanded)
+            occurrence["polygons"] = expanded_polygons
+        image.save(redacted_image_path)
+        verification_ocr = context.run_ocr(
+            redacted_image_path,
+            confidence_threshold,
+            page=page_number,
+            verification=True,
+        )
+        failures = _classify_pixel_residuals(
+            verification_ocr,
+            redact_map,
+            page_number,
+        )
+        for occurrence in unresolved:
+            failures.append({
+                "page": page_number,
+                "entity_id": occurrence.get("entity_id"),
+                "entity_type": entity_types.get(occurrence.get("entity_id"), "UNKNOWN"),
+                "category": "coordinate_mapping_failed",
+            })
 
     redacted_sha = _source_sha256(redacted_image_path)
     map_data = {
@@ -386,10 +671,17 @@ def redact_scan_pixels(
     audit_data = {
         **redact_audit,
         "pipeline": "scan-pixel-redaction",
-        "verification": {"type": "redacted-pixels", "passed": True},
+        "verification": {
+            "type": "redacted-pixels",
+            "passed": not failures,
+            "failed_pages": [page_number] if failures else [],
+            "failures": failures,
+            "retry_attempted": retry_attempted,
+        },
         "restore_supported": False,
         "best_effort": True,
         "warnings": warnings,
+        "pipeline_diagnostics": context.diagnostics.to_dict(),
     }
     return map_data, audit_data
 
@@ -439,40 +731,88 @@ def scan_redact_preserve_format(
     if source.suffix.lower() not in image_extensions | {".pdf"}:
         raise ValueError(f"Unsupported format-preserving scan input: {source.suffix.lower()}")
 
-    redacted_markdown, map_data, audit_data, ocr_meta = scan_redact(
-        image_path=str(source),
-        rules=rules,
-        ocr_engine=ocr_engine,
-        mode=mode,
-        level=level,
-        model_dir=model_dir,
-        confidence_threshold=confidence_threshold,
-        profile=profile,
-        allowlist=allowlist,
-        denylist=denylist,
+    context = ScanPipelineContext(mode=mode, model_dir=model_dir)
+    page_results: List[PageScanResult] = []
+    pixel_failures: List[dict] = []
+    retry_attempted = False
+    artifact_output = output
+    incomplete_output = output.with_name(
+        f"{output.stem}.INCOMPLETE_DO_NOT_USE{output.suffix}"
     )
-    markdown.write_text(redacted_markdown, encoding="utf-8")
+    incomplete_output.unlink(missing_ok=True)
 
     if source.suffix.lower() in image_extensions:
-        redact_scan_pixels(
+        redacted_markdown, map_data, audit_data, ocr_meta = scan_redact(
+            image_path=str(source),
+            rules=rules,
+            ocr_engine=ocr_engine,
+            mode=mode,
+            level=level,
+            model_dir=model_dir,
+            confidence_threshold=confidence_threshold,
+            profile=profile,
+            allowlist=allowlist,
+            denylist=denylist,
+            context=context,
+            page_results_out=page_results,
+        )
+        markdown.write_text(redacted_markdown, encoding="utf-8")
+        _pixel_map, pixel_audit = redact_scan_pixels(
             str(source), str(output), rules, mode=mode, level=level,
             model_dir=model_dir, confidence_threshold=confidence_threshold,
             profile=profile, allowlist=allowlist, denylist=denylist,
+            context=context, page_result=page_results[0], page_number=1,
         )
+        pixel_verification = pixel_audit["verification"]
+        pixel_failures.extend(pixel_verification.get("failures", []))
+        retry_attempted = pixel_verification.get("retry_attempted", False)
+        if pixel_failures:
+            artifact_output = incomplete_output
+            output.replace(artifact_output)
     else:
-        page_images, _total_pages = _render_pdf_pages(str(source))
+        page_images, total_pages = _render_pdf_pages(str(source))
+        context.record_render(total_pages)
         temp_redacted_dir = Path(tempfile.mkdtemp(prefix="legal_desens_redacted_pdf_"))
         redacted_pages: List[str] = []
         try:
-            for index, page_image in enumerate(page_images, start=1):
+            redacted_markdown, map_data, audit_data, ocr_meta = _scan_redact_pdf(
+                pdf_path=str(source),
+                rules=rules,
+                ocr_engine=ocr_engine,
+                mode=mode,
+                level=level,
+                model_dir=model_dir,
+                confidence_threshold=confidence_threshold,
+                profile=profile,
+                allowlist=allowlist,
+                denylist=denylist,
+                context=context,
+                page_image_paths=page_images,
+                total_pages=total_pages,
+                page_results_out=page_results,
+            )
+            markdown.write_text(redacted_markdown, encoding="utf-8")
+            for page_result in page_results:
+                index = page_result.page
+                page_image = page_result.image_path
                 redacted_page = temp_redacted_dir / f"page_{index:04d}.png"
-                redact_scan_pixels(
+                _pixel_map, pixel_audit = redact_scan_pixels(
                     page_image, str(redacted_page), rules, mode=mode, level=level,
                     model_dir=model_dir, confidence_threshold=confidence_threshold,
                     profile=profile, allowlist=allowlist, denylist=denylist,
+                    context=context, page_result=page_result, page_number=index,
+                )
+                pixel_verification = pixel_audit["verification"]
+                pixel_failures.extend(pixel_verification.get("failures", []))
+                retry_attempted = (
+                    retry_attempted
+                    or pixel_verification.get("retry_attempted", False)
                 )
                 redacted_pages.append(str(redacted_page))
-            _write_redacted_scan_pdf(redacted_pages, str(output))
+            if pixel_failures:
+                artifact_output = incomplete_output
+                output.unlink(missing_ok=True)
+            _write_redacted_scan_pdf(redacted_pages, str(artifact_output))
         finally:
             _cleanup_pdf_temp_pages(page_images)
             shutil.rmtree(temp_redacted_dir, ignore_errors=True)
@@ -480,14 +820,22 @@ def scan_redact_preserve_format(
     map_data.update({
         "pipeline": "scan-pixel-redaction",
         "verification": "redacted-pixels",
-        "redacted_file": output.name,
-        "redacted_sha256": _source_sha256(str(output)),
+        "redacted_file": artifact_output.name,
+        "redacted_sha256": _source_sha256(str(artifact_output)),
         "intermediate_markdown_file": markdown.name,
         "intermediate_markdown_sha256": _source_sha256(str(markdown)),
     })
     audit_data.update({
         "pipeline": "scan-pixel-redaction",
-        "verification": {"type": "redacted-pixels", "passed": True},
+        "verification": {
+            "type": "redacted-pixels",
+            "passed": not pixel_failures,
+            "failed_pages": sorted({failure["page"] for failure in pixel_failures}),
+            "failures": pixel_failures,
+            "retry_attempted": retry_attempted,
+            "incomplete_output_file": artifact_output.name if pixel_failures else None,
+        },
+        "pipeline_diagnostics": context.diagnostics.to_dict(),
     })
     return map_data, audit_data, ocr_meta
 
@@ -503,12 +851,22 @@ def _scan_redact_pdf(
     profile: Optional[Profile],
     allowlist: Optional[set],
     denylist: Optional[set],
+    context: ScanPipelineContext,
+    page_image_paths: Optional[List[str]] = None,
+    total_pages: Optional[int] = None,
+    page_results_out: Optional[List[PageScanResult]] = None,
 ) -> Tuple[str, dict, dict, dict]:
     """PDF-specific scan: render pages → OCR each → redact each → merge Markdown."""
     _check_fitz_available()
 
     source_sha = _source_sha256(pdf_path)
-    page_image_paths, total_pages = _render_pdf_pages(pdf_path)
+    owns_page_images = page_image_paths is None
+    if page_image_paths is None:
+        page_image_paths, rendered_page_count = _render_pdf_pages(pdf_path)
+        total_pages = rendered_page_count
+        context.record_render(rendered_page_count)
+    elif total_pages is None:
+        total_pages = len(page_image_paths)
 
     try:
         page_texts: List[str] = []
@@ -523,23 +881,26 @@ def _scan_redact_pdf(
         for page_idx, page_image_path in enumerate(page_image_paths):
             page_num = page_idx + 1
 
-            # OCR this page
-            ocr_result = run_rapidocr(page_image_path, confidence_threshold=confidence_threshold)
+            page_result = _scan_page(
+                page_image_path,
+                page_num,
+                source_sha,
+                rules,
+                context,
+                level,
+                confidence_threshold,
+                profile,
+                allowlist,
+                denylist,
+            )
+            if page_results_out is not None:
+                page_results_out.append(page_result)
+            ocr_result = page_result.ocr_result
             total_ocr_lines += len(ocr_result.lines)
             total_low_conf += len(ocr_result.warnings)
-
-            # Redact this page
-            page_redacted, page_map, page_audit = redact(
-                text=ocr_result.text,
-                rules=rules,
-                source_sha256=source_sha,
-                mode=mode,
-                level=level,
-                model_dir=model_dir,
-                profile=profile,
-                allowlist=allowlist,
-                denylist=denylist,
-            )
+            page_redacted = page_result.redacted_text
+            page_map = page_result.map_data
+            page_audit = page_result.audit_data
 
             # Prefix entities with page number and re-index. Keep an explicit
             # old->new map so occurrences always point to an existing entity.
@@ -647,6 +1008,7 @@ def _scan_redact_pdf(
                 "confidence_threshold": confidence_threshold,
             },
             "warnings": all_warnings,
+            "pipeline_diagnostics": context.diagnostics.to_dict(),
         }
 
         ocr_meta = {
@@ -660,4 +1022,5 @@ def _scan_redact_pdf(
         return redacted_text, map_data, audit_data, ocr_meta
 
     finally:
-        _cleanup_pdf_temp_pages(page_image_paths)
+        if owns_page_images:
+            _cleanup_pdf_temp_pages(page_image_paths)

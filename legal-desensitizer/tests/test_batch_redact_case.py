@@ -489,6 +489,44 @@ class TestBatchRedactCaseIntegration:
         assert (work_dir / _SOURCE_INDEX_FILENAME).is_file()
         assert not (out_path / _ARCHIVE_DIR).exists()
 
+    def test_processing_failure_is_recorded_and_not_published(self, tmp_path, monkeypatch):
+        from legal_desens import batch as batch_module
+        from legal_desens.batch import batch_redact_case
+
+        input_dir = _make_input_dir(tmp_path, {
+            "good.txt": "普通文本",
+            "bad.txt": "另一份普通文本",
+        })
+        out_dir = tmp_path / "output"
+        real_process = batch_module._process_one
+
+        monkeypatch.setattr(
+            batch_module,
+            "_precheck_ner",
+            lambda model_dir=None: {"tag_scheme": "BIO"},
+        )
+
+        def fail_second(src, *args, **kwargs):
+            if src.name == "bad.txt":
+                raise RuntimeError("synthetic processing failure")
+            return real_process(src, *args, **kwargs)
+
+        monkeypatch.setattr(batch_module, "_process_one", fail_second)
+
+        rc = batch_redact_case(
+            input_dir=str(input_dir),
+            out_dir=str(out_dir),
+            profile_name="labor",
+            regex_only=True,
+        )
+
+        assert rc == 1
+        assert not (out_dir / _FINAL_DIR).exists()
+        manifest = json.loads((out_dir / _MANIFEST_FILENAME).read_text(encoding="utf-8"))
+        statuses = {entry["document_id"]: entry["status"] for entry in manifest["documents"]}
+        assert set(statuses.values()) == {"completed", "failed"}
+        assert "synthetic processing failure" not in json.dumps(manifest)
+
     def test_cleanup_archive(self, tmp_path):
         """Archive cleanup moves map/audit to _archive/."""
         from legal_desens.batch import batch_redact_case

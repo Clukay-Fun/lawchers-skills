@@ -19,11 +19,16 @@ from .profile import Profile
 from .rules import Rule
 
 
-def scan_ner_with_warnings(text: str, model_dir: Optional[str] = None) -> Tuple[List[Span], List[dict]]:
+def scan_ner_with_warnings(
+    text: str,
+    model_dir: Optional[str] = None,
+    ner_engine=None,
+) -> Tuple[List[Span], List[dict]]:
     """Run NER and return (spans, decode_warnings)."""
-    from .engine.ner import NEREngine
-    engine = NEREngine(model_dir)
-    return engine.scan(text)
+    if ner_engine is None:
+        from .engine.ner import get_ner_engine_instance
+        ner_engine = get_ner_engine_instance(model_dir)
+    return ner_engine.scan(text)
 
 
 # NER entity type → canonical type (before profile processing)
@@ -236,6 +241,7 @@ def redact(
     profile: Optional[Profile] = None,
     allowlist: Optional[Set[str]] = None,
     denylist: Optional[Set[str]] = None,
+    ner_engine=None,
 ) -> Tuple[str, dict, dict]:
     """Redact text using regex rules and optionally NER.
 
@@ -264,7 +270,14 @@ def redact(
     spans = scan_regex(text, rules)
     ner_warnings: List[dict] = []
     if mode != "regex-only":
-        ner_spans, ner_warnings = scan_ner_with_warnings(text, model_dir)
+        if ner_engine is None:
+            ner_spans, ner_warnings = scan_ner_with_warnings(text, model_dir)
+        else:
+            ner_spans, ner_warnings = scan_ner_with_warnings(
+                text,
+                model_dir,
+                ner_engine=ner_engine,
+            )
         from .engine.ner_postprocess import postprocess_ner_spans
         ner_spans, postprocess_warnings = postprocess_ner_spans(
             ner_spans,

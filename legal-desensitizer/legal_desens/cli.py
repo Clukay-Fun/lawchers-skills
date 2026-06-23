@@ -535,6 +535,17 @@ def _cmd_redact_scan(args: argparse.Namespace) -> int:
         with open(args.audit, "w", encoding="utf-8") as f:
             json.dump(audit_data, f, ensure_ascii=False, indent=2)
 
+    verification = audit_data.get("verification")
+    if isinstance(verification, dict) and verification.get("passed") is False:
+        failed_pages = verification.get("failed_pages", [])
+        print(
+            "Error: Pixel redaction verification failed"
+            + (f" on page(s): {failed_pages}" if failed_pages else "")
+            + ". Audit and quarantined incomplete output were preserved.",
+            file=sys.stderr,
+        )
+        return 1
+
     print(
         f"Scan complete: {ocr_meta['total_lines']} lines OCR'd, "
         f"{ocr_meta['low_confidence_lines']} low-confidence warnings, "
@@ -702,10 +713,10 @@ def _cmd_batch_redact_case(args: argparse.Namespace) -> int:
 
 
 def _cmd_ner_spans(args: argparse.Namespace) -> int:
-    from .engine.ner import NEREngine
+    from .engine.ner import get_ner_engine_instance
 
     try:
-        engine = NEREngine(args.model_dir)
+        engine = get_ner_engine_instance(args.model_dir)
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
