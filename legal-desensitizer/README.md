@@ -5,7 +5,7 @@
 > 定位：通用案件材料脱敏工具，**已通过劳动案件场景首轮实战验收**。当前成熟 profile：`labor`（默认）。换刑事/商事/婚姻家事/医疗等场景时**不改核心引擎**，只新增/调整 profile + allowlist/denylist + 规则 + 验收样本。
 
 - 命令：`legal-desens`
-- NER 模型包：[`Clukay416/legal-desens-bert4ner-onnx`](https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx)
+- NER 模型包：[`Clukay416/legal-desens-cluener-onnx`](https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx)
 - 可逆性靠**位置映射**（不靠字符串替换）；还原前用 **SHA-256** 防错配。
 - **commercial-safe core**：默认栈不含 AGPL/商用限制依赖；PDF 为 opt-in `[pdf]` extra（AGPL，本地自用）。
 
@@ -125,9 +125,9 @@ legal-desens ner-inspect
 # 从内置 ModelScope 模型仓库下载模型（推荐）
 bash scripts/install_with_model.sh
 
-# 覆盖模型下载地址（仅在换 ModelScope / GitHub Release / 对象存储地址时使用）
-LEGAL_DESENS_MODEL_URL="https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx/resolve/master/bert4ner-base-chinese-onnx.zip" \
-LEGAL_DESENS_MODEL_SHA256="d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703" \
+# 覆盖模型下载地址（仅在换 ModelScope / 对象存储地址时使用）
+LEGAL_DESENS_MODEL_URL="https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx/resolve/master/cluener-roberta-base-onnx.zip" \
+LEGAL_DESENS_MODEL_SHA256="13958b2a4aff99fef17c22d844963d10cc0fd6fbbd83b01844fef527b23e1b6a" \
 bash scripts/install_with_model.sh
 
 # legacy/import-only：已有本地兼容模型目录时导入
@@ -227,15 +227,15 @@ pip install ".[dev,ocr,pdf]" && pytest
 模型权重不进入 git 仓库。当前公开模型包放在 ModelScope：
 
 ```text
-https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx
+https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx
 ```
 
 可用 URL + SHA-256 安装：
 
 ```bash
 legal-desens install-model \
-  --url "https://modelscope.cn/models/Clukay416/legal-desens-bert4ner-onnx/resolve/master/bert4ner-base-chinese-onnx.zip" \
-  --sha256 "d572400b7b46c104bb41f95f6c665ded5274aecf14cd49fd9c3d7bf2b6d55703"
+  --url "https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx/resolve/master/cluener-roberta-base-onnx.zip" \
+  --sha256 "13958b2a4aff99fef17c22d844963d10cc0fd6fbbd83b01844fef527b23e1b6a"
 
 legal-desens ner-inspect
 ```
@@ -249,7 +249,7 @@ vocab.txt
 labels.json 或 config.json 内含 id2label/label2id
 ```
 
-如需自托管，也可以放到 GitHub Release Asset 或对象存储；下载链接和 SHA-256 应同步记录在 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
+如需自托管，也可以放到对象存储；下载链接和 SHA-256 应同步记录在 [`references/optional-ner-models.md`](references/optional-ner-models.md)。
 
 ### 本地导出开源模型
 
@@ -269,7 +269,7 @@ legal-desens redact input.txt --model-dir ~/ner-bert4ner --out ... --map ... --a
 ### 其他方式
 
 ```bash
-# 自托管模型包下载（ModelScope / GitHub Release Asset / 对象存储均可）
+# 自托管模型包下载（ModelScope / 对象存储均可）
 legal-desens install-model --url <URL> --sha256 <HASH>
 
 # legacy：若本机恰好已有一个兼容模型目录，可直接导入
@@ -325,8 +325,9 @@ legal-desens redact input.docx --profile strict   # 全脱
 | `.csv`  | redact / restore / audit | **字节级**一致（仅改 cell 文本，保留 dialect） | redacted.csv + map.json |
 | `.docx` | redact / restore / audit | **内容级**（提取文本一致） | redacted.docx + map.json |
 | `.xlsx` | redact / restore / audit | **内容级**（单元格文本一致） | redacted.xlsx + map.json |
-| 图片 / 扫描件 | `redact-scan`（不可逆） | **不支持还原** | 需 `[ocr]` extra，输出脱敏 Markdown 派生副本 |
-| `.pdf`  | `redact-scan`（不可逆） | **不支持还原** | 需 `[pdf]`+`[ocr]` extra（AGPL），PDF→图片→OCR→脱敏 Markdown |
+| 图片 / 扫描件 | `redact-scan`（不可逆） | **不支持还原** | 需 `[ocr]` extra，白框遮盖并保持图片格式，同时保留脱敏 Markdown 中间文件 |
+| 文字层 `.pdf` | `redact`（原位真删除） | **不支持还原** | 需 `[pdf]` extra（AGPL），输出脱敏 PDF |
+| 扫描 `.pdf` | `redact-scan`（不可逆） | **不支持还原** | 需 `[pdf]`+`[ocr]` extra，逐页白框遮盖并重新输出 PDF，同时保留脱敏 Markdown 中间文件 |
 | `.doc/.xls/.wps/...` | 不支持 | — | 先转换为 `.docx/.xlsx` 再处理 |
 
 每次 redact 产出三件套：`<name>.redacted.<ext>`、`<name>.map.json`、`<name>.audit.json`。
@@ -346,6 +347,10 @@ legal-desens redact input.docx \
 # 全脱敏（含时间/金额）：切 strict profile
 legal-desens redact input.docx --profile strict \
   --out input.redacted.docx --map input.map.json --audit input.audit.json
+
+# 有文字层的 PDF：删除原内容层并输出 PDF（不可还原）
+legal-desens redact input.pdf --regex-only \
+  --out input.redacted.pdf --map input.map.json --audit input.audit.json
 ```
 
 > 不传 `--regex-only` 即尝试 `regex+ner`；模型缺失会**明确报错**，不会静默降级。
@@ -368,7 +373,7 @@ legal-desens audit out.redacted.txt --map out.map.json --out out.audit.json
 
 输出命中数量、实体类型分布、引擎来源、覆盖告警、残留扫描结果。
 
-### 图片 / 扫描件 OCR / PDF（不可逆，可选）
+### 图片 / 扫描 PDF OCR（不可逆，可选）
 
 ```bash
 pip install ".[ocr]"        # 装 RapidOCR（轻量，ONNXRuntime）
@@ -377,11 +382,13 @@ pip install ".[ocr,pdf]"    # 两者都装（推荐）
 
 # 图片输入
 legal-desens redact-scan input.png --ocr rapidocr \
-  --out input.redacted.md --map input.map.json --audit input.audit.json
+  --out input.redacted.png --md-out input.redacted.intermediate.md \
+  --map input.map.json --audit input.audit.json
 
 # PDF 输入（需 [pdf]+[ocr]）
 legal-desens redact-scan input.pdf --ocr rapidocr \
-  --out input.redacted.md --map input.map.json --audit input.audit.json
+  --out input.redacted.pdf --md-out input.redacted.intermediate.md \
+  --map input.map.json --audit input.audit.json
 ```
 
 - **不可逆**：OCR/解析丢失原位置，map 标 `restore_supported:false`、`best_effort:true`，**不支持 restore**。

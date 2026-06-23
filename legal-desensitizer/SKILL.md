@@ -36,9 +36,10 @@ Before running any command, determine the file extension:
 | `.csv` | yes | yes | yes | byte | `redacted.csv` + `map.json`, `redacted_sha256` must match |
 | `.docx` | yes | yes | yes | content | `redacted.docx` + `map.json`, `redacted_sha256` must match |
 | `.xlsx` | yes | yes | yes | content | `redacted.xlsx` + `map.json`, `redacted_sha256` must match |
-| `.png/.jpg/.jpeg/.tiff/.bmp` | `redact-scan` | **no restore** | via map | irreversible | Not restorable — derivative only |
+| text-layer `.pdf` | yes (`[pdf]`) | **no restore** | via map | redacted-content | Original text is permanently removed |
+| `.png/.jpg/.jpeg/.tiff/.bmp` | `redact-scan` | **no restore** | via map | redacted-pixels | White-boxed same-format image + redacted Markdown intermediate |
 | `.pptx/.html` | `redact-scan` or `parse` | **no restore** | via map | irreversible | Not restorable — derivative only |
-| scanned `.pdf` | `redact-scan`（需 `[pdf]`+`[ocr]`） | **no restore** | via map | irreversible | Not restorable — derivative only |
+| scanned `.pdf` | `redact-scan`（需 `[pdf]`+`[ocr]`） | **no restore** | via map | redacted-pixels | White-boxed image-only PDF + redacted Markdown intermediate |
 | `.doc/.xls/.wps/.et/.dps/.pages/.numbers/.key` | **unsupported** | **unsupported** | **unsupported** | — | Convert to .docx/.xlsx/.pptx or PDF/image first |
 
 **Verification semantics:**
@@ -178,7 +179,8 @@ legal-desens ner-spans <input.txt> [--model-dir <path>] [--out spans.json]
 legal-desens redact-scan <input.png|input.pdf> \
   --ocr rapidocr \
   [--regex-only] \
-  --out <output.redacted.md> \
+  --out <output.redacted.png|output.redacted.pdf> \
+  --md-out <output.redacted.intermediate.md> \
   --map <output.map.json> \
   --audit <output.audit.json>
 ```
@@ -186,7 +188,7 @@ legal-desens redact-scan <input.png|input.pdf> \
 - Accepts: `.png`, `.jpg`, `.jpeg`, `.tiff`, `.bmp`, `.pdf` (PDF requires `[pdf]` extra)
 - For PDF input: renders each page to image → OCR → redact → per-page Markdown sections
 - Requires: `pip install legal-desens[ocr]` (RapidOCR); for PDF also `pip install legal-desens[pdf]`
-- Output: redacted Markdown + map (irreversible) + audit
+- Output: white-boxed file in the input format + redacted Markdown intermediate + map + audit
 - Always write Chinese Markdown with `--out`; do not use shell redirection such as `>` for final files.
 - Map marks `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`
 - **No restore possible** — this produces derivative copies only
@@ -231,7 +233,7 @@ legal-desens parse <input.pdf> \
 - Map includes CSV-specific locators: `type: csv`, `row`, `column`.
 
 ### .docx
-- Content-level redact/restore on main body (`word/document.xml`).
+- Content-level redact/restore covers body, tables/text boxes, headers, footers, footnotes, endnotes, and comments.
 - Cross-run entities within the same paragraph are supported.
 - Cross-paragraph entities are not supported (written to audit warnings).
 - Restore guarantees extracted text matches original, not byte-identical DOCX.
@@ -245,7 +247,8 @@ legal-desens parse <input.pdf> \
 - PDF support is an opt-in `[pdf]` extra (PyMuPDF, AGPL licensed, local use only).
 - Default core remains AGPL-free / commercial-safe — `pip install .` does not include PyMuPDF.
 - Install with `pip install legal-desens[pdf]` or `pip install legal-desens[ocr,pdf]`.
-- `redact-scan input.pdf` renders each page to image → OCR → redact → Markdown derivative.
+- Text-layer PDF: `redact input.pdf --out output.redacted.pdf ...` permanently removes detected text and scans extractable PDF containers for residual originals.
+- Scanned PDF: `redact-scan input.pdf` renders each page to image → OCR → white-box redact → image-only PDF, and retains a redacted Markdown intermediate.
 - **Not reversible.** Map marks `restore_supported: false`, `best_effort: true`.
 - Missing `[pdf]` extra → CLI returns a clear error with install guidance.
 - Missing `[ocr]` extra → CLI returns a clear error (OCR is required for the pipeline).
@@ -256,14 +259,14 @@ legal-desens parse <input.pdf> \
 - **Not reversible.** Derivative copies only.
 
 ### .png / .jpg / .jpeg / .tiff / .bmp
-- Use `redact-scan` — irreversible OCR → redact → Markdown derivative.
+- Use `redact-scan` — irreversible OCR → white-box pixel redaction in the original image format, plus a redacted Markdown intermediate.
 - Requires `pip install legal-desens[ocr]` (RapidOCR).
 - **Not reversible.** Map marks `restore_supported: false`, `best_effort: true`.
 - OCR may miss or misrecognize characters — residual scan only covers recognized text.
 - Low-confidence lines (< 0.7) are flagged in audit warnings.
 
 ### scanned PDF
-- `redact-scan input.pdf` directly — renders pages to images → OCR → redact → Markdown derivative.
+- `redact-scan input.pdf` directly — renders pages to images → OCR → white-box pixel redaction → image-only PDF, plus a redacted Markdown intermediate.
 - Requires both `[pdf]` and `[ocr]` extras: `pip install legal-desens[pdf,ocr]`.
 - Each page is rendered as a 200 DPI PNG, OCR'd independently, then merged into per-page Markdown sections.
 - Map marks `restore_supported: false`, `best_effort: true` — **not reversible**.

@@ -6,7 +6,7 @@
 
 | 项目 | 作用 | 状态 |
 |------|------|------|
-| [`legal-desensitizer/`](legal-desensitizer/) | **通用案件材料脱敏 skill**（通用核心 + 场景 profile）：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**，图片/扫描件走不可逆 OCR；profile 控制脱/留（`labor` 默认已验证、`strict` 全脱）。可选接入本地 NER；PDF 支持为 opt-in extra | 可用（劳动场景首轮验收） |
+| [`legal-desensitizer/`](legal-desensitizer/) | **通用案件材料脱敏 skill**（通用核心 + 场景 profile）：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**，图片/扫描件走不可逆 OCR；profile 控制脱/留（`labor` 默认已验证、`strict` 全脱）。可选接入[本地 CLUENER ONNX 模型](https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx)；PDF 支持为 opt-in extra | 可用（劳动场景首轮验收） |
 
 ## 给 AI 代理的快速入口
 
