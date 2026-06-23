@@ -313,17 +313,32 @@ def redact_scan_pixels(
             overlap_end = min(end, line_end)
             if overlap_start >= overlap_end or not line.text:
                 continue
-            xs = [point[0] for point in line.box]
-            ys = [point[1] for point in line.box]
-            left, right = min(xs), max(xs)
-            top, bottom = min(ys), max(ys)
             local_start = overlap_start - line_start
             local_end = overlap_end - line_start
-            span_left = left + (right - left) * local_start / len(line.text)
-            span_right = left + (right - left) * local_end / len(line.text)
+
+            # RapidOCR exposes a quadrilateral for the whole recognized line,
+            # not per-character boxes. Character widths are not uniform, so a
+            # strict proportional slice can leave the edges of short NER spans
+            # visible. Expand by one estimated character on each side and
+            # interpolate along the original (possibly skewed) line box.
+            padded_start = max(0, local_start - 1)
+            padded_end = min(len(line.text), local_end + 1)
+            start_ratio = padded_start / len(line.text)
+            end_ratio = padded_end / len(line.text)
+
+            top_left, top_right, bottom_right, bottom_left = line.box
+
+            def interpolate(left_point, right_point, ratio):
+                return [
+                    left_point[0] + (right_point[0] - left_point[0]) * ratio,
+                    left_point[1] + (right_point[1] - left_point[1]) * ratio,
+                ]
+
             polygon = [
-                [span_left, top], [span_right, top],
-                [span_right, bottom], [span_left, bottom],
+                interpolate(top_left, top_right, start_ratio),
+                interpolate(top_left, top_right, end_ratio),
+                interpolate(bottom_left, bottom_right, end_ratio),
+                interpolate(bottom_left, bottom_right, start_ratio),
             ]
             draw.polygon([(p[0], p[1]) for p in polygon], fill="white")
             polygons.append(polygon)
