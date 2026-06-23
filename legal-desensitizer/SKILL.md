@@ -189,6 +189,8 @@ legal-desens redact-scan <input.png|input.pdf> \
 - For PDF input: renders each page to image → OCR → redact → per-page Markdown sections
 - Requires: `pip install legal-desens[ocr]` (RapidOCR); for PDF also `pip install legal-desens[pdf]`
 - Output: white-boxed file in the input format + redacted Markdown intermediate + map + audit
+- Multi-page PDFs are rendered once; OCR/NER instances are reused across pages.
+- Pixel verification failures return exit code 1, still write audit/map/Markdown, and quarantine the partial artifact as `*.INCOMPLETE_DO_NOT_USE.pdf` instead of publishing the requested output name.
 - Always write Chinese Markdown with `--out`; do not use shell redirection such as `>` for final files.
 - Map marks `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`
 - **No restore possible** — this produces derivative copies only
@@ -269,6 +271,7 @@ legal-desens parse <input.pdf> \
 - `redact-scan input.pdf` directly — renders pages to images → OCR → white-box pixel redaction → image-only PDF, plus a redacted Markdown intermediate.
 - Requires both `[pdf]` and `[ocr]` extras: `pip install legal-desens[pdf,ocr]`.
 - Each page is rendered as a 200 DPI PNG, OCR'd independently, then merged into per-page Markdown sections.
+- Audit includes page-level pipeline timings and privacy-safe failure diagnostics (`entity_id`, type, polygon category; never original text).
 - Map marks `restore_supported: false`, `best_effort: true` — **not reversible**.
 - Keep only final redacted Markdown and the sensitive report. Intermediate page images/OCR files belong in a temporary/work directory and must be deleted before success is reported.
 

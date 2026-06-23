@@ -244,13 +244,21 @@ class TestCLIScanCommands:
     def test_ocr_missing_extra_raises_import_error(self, monkeypatch):
         """If rapidocr is not importable, raises ImportError with install hint."""
         import importlib
-        monkeypatch.setattr(
-            importlib, "import_module",
-            lambda name: (_ for _ in ()).throw(ImportError("mock")) if name == "rapidocr_onnxruntime" else importlib.__import__(name),
-        )
-        from legal_desens.engine.ocr import run_rapidocr
-        with pytest.raises(ImportError, match="pip install legal-desens"):
-            run_rapidocr("dummy.png")
+        import legal_desens.engine.ocr as ocr_module
+
+        # Reset singleton
+        old_instance = ocr_module._rapidocr_instance
+        ocr_module._rapidocr_instance = None
+
+        try:
+            monkeypatch.setattr(
+                importlib, "import_module",
+                lambda name: (_ for _ in ()).throw(ImportError("mock")) if name == "rapidocr_onnxruntime" else importlib.__import__(name),
+            )
+            with pytest.raises(ImportError, match="pip install legal-desens"):
+                ocr_module.run_rapidocr("dummy.png")
+        finally:
+            ocr_module._rapidocr_instance = old_instance
 
     @requires_rapidocr
     def test_redact_scan_cli(self, tmp_path, rules):

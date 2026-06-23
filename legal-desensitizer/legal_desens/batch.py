@@ -233,6 +233,8 @@ def _process_one(
         "redacted_text": None,
         "map_data": None,
         "audit_data": None,
+        "status": "completed",
+        "failure_category": None,
     }
 
     if category == "A":
@@ -365,8 +367,14 @@ def _run_gate(
 
     for r in results:
         doc_id = r["doc_id"]
+        if r.get("status") == "failed":
+            passed = False
+            failures.append(
+                f"[{doc_id}] processing failed: {r.get('failure_category', 'processing_error')}"
+            )
+            continue
         text = r.get("redacted_text", "")
-        audit_data = r.get("audit_data", {})
+        audit_data = r.get("audit_data") or {}
         if not text or not audit_data:
             continue
 
@@ -555,7 +563,7 @@ def _generate_report(
 
     for r in results:
         doc_id = r["doc_id"]
-        audit_data = r.get("audit_data", {})
+        audit_data = r.get("audit_data") or {}
         summary = audit_data.get("summary", {})
         residual = audit_data.get("residual_scan", {})
         warnings = audit_data.get("warnings", [])
@@ -563,6 +571,7 @@ def _generate_report(
         lines.append(f"### {doc_id} ({r['source_ext']})")
         lines.append("")
         lines.append(f"- **Pipeline**: {r['pipeline']}")
+        lines.append(f"- **Status**: {r.get('status', 'completed')}")
         lines.append(f"- **Irreversible**: {r['irreversible']}")
         lines.append(f"- **实体数**: {summary.get('total_entities', 0)}")
         lines.append(f"- **替换数**: {summary.get('total_occurrences', 0)}")
@@ -617,7 +626,7 @@ def _write_manifest(
 
     for r in results:
         doc_id = r["doc_id"]
-        audit_data = r.get("audit_data", {})
+        audit_data = r.get("audit_data") or {}
         summary = audit_data.get("summary", {})
 
         doc_entries.append({
@@ -630,6 +639,8 @@ def _write_manifest(
             "entity_count": summary.get("total_entities", 0),
             "occurrence_count": summary.get("total_occurrences", 0),
             "by_entity_type": summary.get("by_entity_type", {}),
+            "status": r.get("status", "completed"),
+            "failure_category": r.get("failure_category"),
         })
 
         source_index[doc_id] = {
@@ -814,15 +825,32 @@ def batch_redact_case(
             result = _process_one(
                 src, doc_id, rules, profile, allowlist, denylist, model_dir, regex_only,
             )
-        except BatchError:
-            raise
         except Exception as e:
-            raise BatchError(f"Failed to process {src.name}: {e}")
+            result = {
+                "doc_id": doc_id,
+                "source_path": str(src),
+                "source_name": src.name,
+                "source_sha256": _sha256_file(str(src)),
+                "source_ext": src.suffix.lower(),
+                "page_count": _count_pages(src, src.suffix.lower()),
+                "pipeline": "scan" if _classify_ext(src) == "B" else "redact",
+                "irreversible": _classify_ext(src) == "B",
+                "redacted_text": None,
+                "map_data": None,
+                "audit_data": None,
+                "status": "failed",
+                "failure_category": type(e).__name__,
+            }
+            print(
+                f"  FAILED: {doc_id} ({type(e).__name__}); continuing to collect diagnostics.",
+                file=sys.stderr,
+            )
 
         # Write anonymized output
-        final_name = f"{doc_id}.redacted.md"
-        final_path = staging_final_dir / final_name
-        final_path.write_text(result["redacted_text"], encoding="utf-8")
+        if result.get("status") != "failed":
+            final_name = f"{doc_id}.redacted.md"
+            final_path = staging_final_dir / final_name
+            final_path.write_text(result["redacted_text"], encoding="utf-8")
 
         # Write map and audit (intermediate, may be cleaned up)
         map_path = work_dir / f"{doc_id}.map.json"
@@ -869,6 +897,15 @@ def batch_redact_case(
             print(f"  FAIL: {f}", file=sys.stderr)
         # Write manifest even on failure (for debugging)
         _write_manifest(results, work_dir, profile_name, len(allowlist), len(denylist), ner_info)
+        _write_manifest(
+            results,
+            out_path,
+            profile_name,
+            len(allowlist),
+            len(denylist),
+            ner_info,
+            write_source_index=False,
+        )
         return 1
 
     print("  Gate passed.", file=sys.stderr)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -328,12 +329,10 @@ class ModelIO:
     needs_token_type_ids: bool
 
 
-def inspect_model(model_path: Path) -> ModelIO:
-    """Inspect ONNX model I/O signatures without assuming anything."""
-    sess = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
-
-    inputs = sess.get_inputs()
-    outputs = sess.get_outputs()
+def inspect_model_from_session(session: ort.InferenceSession) -> ModelIO:
+    """Read ONNX model I/O signatures from an existing session."""
+    inputs = session.get_inputs()
+    outputs = session.get_outputs()
 
     input_names = [inp.name for inp in inputs]
     input_shapes = [list(inp.shape) for inp in inputs]
@@ -356,7 +355,34 @@ def inspect_model(model_path: Path) -> ModelIO:
     )
 
 
+def inspect_model(model_path: Path) -> ModelIO:
+    """Inspect ONNX model I/O signatures. Creates a temporary session.
+
+    Note: Prefer inspect_model_from_session() when you already have a session.
+    """
+    sess = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+    return inspect_model_from_session(sess)
+
+
 # ── NER Engine ───────────────────────────────────────────────────────────────
+
+
+# Singleton NEREngine instance
+_ner_engine_instance = None
+_ner_engine_model_dir = None
+_ner_engine_lock = threading.Lock()
+
+
+def get_ner_engine_instance(model_dir: Optional[str] = None) -> "NEREngine":
+    """Get or create singleton NEREngine instance."""
+    global _ner_engine_instance, _ner_engine_model_dir
+    resolved = _resolve_model_dir(model_dir).expanduser().resolve()
+    if _ner_engine_instance is None or _ner_engine_model_dir != resolved:
+        with _ner_engine_lock:
+            if _ner_engine_instance is None or _ner_engine_model_dir != resolved:
+                _ner_engine_instance = NEREngine(str(resolved))
+                _ner_engine_model_dir = resolved
+    return _ner_engine_instance
 
 
 class NEREngine:
@@ -375,13 +401,14 @@ class NEREngine:
             self._dir / "config.json",
         )
 
-        # Load ONNX model
+        # Load ONNX model - create only ONE session
         model_path = self._dir / "model.onnx"
-        self._model_io = inspect_model(model_path)
         self._session = ort.InferenceSession(
             str(model_path),
             providers=["CPUExecutionProvider"],
         )
+        # Read I/O from the same session (no duplicate session)
+        self._model_io = inspect_model_from_session(self._session)
 
     @property
     def model_io(self) -> ModelIO:
