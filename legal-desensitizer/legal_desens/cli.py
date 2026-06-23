@@ -266,6 +266,28 @@ def _cmd_redact(args: argparse.Namespace) -> int:
     # B: Irreversible formats → route to 009 scan/parse
     elif fmt == "irreversible":
         ext = Path(args.input).suffix.lower()
+        if ext == ".pdf" and args.out and Path(args.out).suffix.lower() == ".pdf":
+            from .adapters.pdf_adapter import redact_text_pdf
+            try:
+                map_data, audit_data = redact_text_pdf(
+                    source_path=args.input,
+                    redacted_path=args.out,
+                    rules=rules,
+                    redact_fn=_make_txt_redact_fn(profile, allowlist, denylist),
+                    mode="regex-only" if args.regex_only else "regex+ner",
+                    level=args.level,
+                    model_dir=args.model_dir,
+                )
+            except (ImportError, RuntimeError, ValueError, FileNotFoundError) as e:
+                print(f"Error: {e}", file=sys.stderr)
+                return 1
+            if args.map:
+                with open(args.map, "w", encoding="utf-8") as f:
+                    json.dump(map_data, f, ensure_ascii=False, indent=2)
+            if args.audit:
+                with open(args.audit, "w", encoding="utf-8") as f:
+                    json.dump(audit_data, f, ensure_ascii=False, indent=2)
+            return 0
         print(
             f"Error: {ext} is an irreversible format.\n"
             "Use 'redact-scan' for images/scanned docs (requires [ocr] extra),\n"
@@ -414,9 +436,9 @@ def _cmd_restore(args: argparse.Namespace) -> int:
 
 
 def _cmd_redact_scan(args: argparse.Namespace) -> int:
-    """Redact-scan: OCR → redact → irreversible derivative (Markdown)."""
+    """Redact-scan: OCR → redact → Markdown and optional format-preserving output."""
     from .engine.allowlist import load_allowlist
-    from .scan import scan_redact
+    from .scan import scan_redact, scan_redact_preserve_format
 
     rules = load_rules(args.rules)
 
@@ -459,7 +481,30 @@ def _cmd_redact_scan(args: argparse.Namespace) -> int:
             print(f"Warning: denylist file not found: {denylist_file}", file=sys.stderr)
 
     try:
-        redacted_text, map_data, audit_data, ocr_meta = scan_redact(
+        input_suffix = Path(args.input).suffix.lower()
+        output_suffix = Path(args.out).suffix.lower() if args.out else ""
+        preserve_format = bool(args.out and output_suffix == input_suffix)
+
+        if preserve_format:
+            markdown_path = args.md_out or str(
+                Path(args.out).with_name(Path(args.out).stem + ".intermediate.md")
+            )
+            map_data, audit_data, ocr_meta = scan_redact_preserve_format(
+                source_path=args.input,
+                output_path=args.out,
+                markdown_path=markdown_path,
+                rules=rules,
+                ocr_engine=args.ocr,
+                mode="regex-only" if args.regex_only else "regex+ner",
+                level=args.level,
+                model_dir=args.model_dir,
+                profile=profile,
+                allowlist=allowlist,
+                denylist=denylist,
+            )
+            redacted_text = None
+        else:
+            redacted_text, map_data, audit_data, ocr_meta = scan_redact(
             image_path=args.input,
             rules=rules,
             ocr_engine=args.ocr,
@@ -469,7 +514,7 @@ def _cmd_redact_scan(args: argparse.Namespace) -> int:
             profile=profile,
             allowlist=allowlist,
             denylist=denylist,
-        )
+            )
     except ImportError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -477,9 +522,9 @@ def _cmd_redact_scan(args: argparse.Namespace) -> int:
         print(f"Error: {e}", file=sys.stderr)
         return 1
 
-    if args.out:
+    if args.out and redacted_text is not None:
         Path(args.out).write_text(redacted_text, encoding="utf-8")
-    else:
+    elif not args.out and redacted_text is not None:
         _write_stdout_utf8(redacted_text)
 
     if args.map:
@@ -776,7 +821,7 @@ def main(argv=None):
     # ── redact-scan ──
     p_scan = sub.add_parser(
         "redact-scan",
-        help="OCR image/scanned doc → redact → irreversible derivative (Markdown)",
+        help="OCR image/scanned doc → white-box redact → same-format file + Markdown intermediate",
     )
     p_scan.add_argument(
         "input",
@@ -798,7 +843,14 @@ def main(argv=None):
                         help="Path to case-specific denylist file (one term per line, local, not in git)")
     p_scan.add_argument("--entity-policy", default=None,
                         help="Path to entity_policy JSON file (local, not in git)")
-    p_scan.add_argument("--out", help="Output redacted Markdown file")
+    p_scan.add_argument(
+        "--out",
+        help="Output redacted file; use the input extension for white-box format preservation, or .md for legacy Markdown-only output",
+    )
+    p_scan.add_argument(
+        "--md-out",
+        help="Intermediate redacted Markdown path when --out preserves the input format",
+    )
     p_scan.add_argument("--map", help="Output map JSON file (with irreversible markers)")
     p_scan.add_argument("--audit", help="Output audit JSON file")
 
