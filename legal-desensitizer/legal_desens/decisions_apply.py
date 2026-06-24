@@ -7,6 +7,8 @@ Guarantees:
 - 'keep' decisions: text is never modified
 - 'redact' decisions: text is always modified at the specified position
 - Only decision-specified positions are modified (no global re-detection)
+- Every 'redact' decision produces an entity in the output map
+- Overlapping, missing block, or out-of-range decisions cause failure
 """
 
 from __future__ import annotations
@@ -14,18 +16,16 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 
-def _load_decisions(decisions_path: str) -> List[dict]:
-    """Load decisions JSON file."""
-    with open(decisions_path, "r", encoding="utf-8") as f:
+def _load_decisions(path: str) -> List[dict]:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def _load_source_map(map_path: str) -> dict:
-    """Load source map JSON file."""
-    with open(map_path, "r", encoding="utf-8") as f:
+def _load_source_map(path: str) -> dict:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -74,58 +74,26 @@ def _mask_value(original: str, entity_type: str) -> str:
         return chars[0] + '***'
 
 
-def _build_redact_spans(
-    decisions: List[dict],
-    blocks: List[dict],
-    block_offsets: Dict[str, int],
-    full_text: str,
-) -> Tuple[List[dict], Dict[int, dict]]:
-    """Convert decisions to document-level redaction spans.
+class DecisionApplicationResult:
+    """Result of applying decisions to a document."""
 
-    Returns (spans, decision_map) where spans have start/end/replacement
-    at document level, and decision_map maps span index to decision.
-    """
-    blocks_by_id = {b["id"]: b for b in blocks}
-    redact_decisions = [d for d in decisions if d.get("action") == "redact"]
+    def __init__(self):
+        self.entities: List[dict] = []
+        self.occurrences: List[dict] = []
+        self.applied: List[dict] = []  # {decision_id, original_start, original_end, redacted_start, redacted_end, entity_id}
+        self.failed: List[dict] = []   # {decision_id, reason}
 
-    spans = []
-    decision_map = {}
+    @property
+    def all_applied(self) -> bool:
+        return len(self.failed) == 0
 
-    for d in redact_decisions:
-        block_id = d.get("blockId")
-        block = blocks_by_id.get(block_id)
-        if not block:
-            continue
+    @property
+    def redact_requested(self) -> int:
+        return len(self.applied) + len(self.failed)
 
-        block_offset = block.get("char_offset", block_offsets.get(block_id, 0))
-        local_start = d.get("start", 0)
-        local_end = d.get("end", 0)
-        block_text = block.get("text", "")
-
-        # Validate bounds
-        if local_start < 0 or local_end > len(block_text) or local_start >= local_end:
-            continue
-
-        doc_start = block_offset + local_start
-        doc_end = block_offset + local_end
-        original = full_text[doc_start:doc_end]
-
-        entity_type = d.get("entityType", "")
-        replacement = _mask_value(original, entity_type)
-
-        span_idx = len(spans)
-        spans.append({
-            "start": doc_start,
-            "end": doc_end,
-            "replacement": replacement,
-            "entity_id": f"decision_{d.get('id', span_idx)}",
-            "original": original,
-        })
-        decision_map[span_idx] = d
-
-    # Sort by start for non-overlapping replacement
-    spans.sort(key=lambda s: s["start"])
-    return spans, decision_map
+    @property
+    def redact_applied(self) -> int:
+        return len(self.applied)
 
 
 def apply_decisions_text(
@@ -133,66 +101,132 @@ def apply_decisions_text(
     output_path: str,
     decisions: List[dict],
     blocks: List[dict],
-) -> dict:
+) -> Tuple[dict, DecisionApplicationResult]:
     """Apply decisions to a text file.
 
-    Returns map_data dict with entities and occurrences.
+    Returns (map_data, application_result).
+    Every 'redact' decision must produce an entity. Overlaps cause failure.
     """
+    result = DecisionApplicationResult()
+    blocks_by_id = {b["id"]: b for b in blocks}
+
     source_bytes = Path(source_path).read_bytes()
     full_text = source_bytes.decode("utf-8-sig") if source_bytes[:3] == b'\xef\xbb\xbf' else source_bytes.decode("utf-8")
 
-    block_offsets = {b["id"]: b.get("char_offset", 0) for b in blocks}
-    spans, _ = _build_redact_spans(decisions, blocks, block_offsets, full_text)
+    # Validate all redact decisions before modifying anything
+    redact_decisions = [d for d in decisions if d.get("action") == "redact"]
+    spans = []  # (doc_start, doc_end, decision, original, replacement)
 
-    # Build redacted text by replacing spans
+    for d in redact_decisions:
+        block_id = d.get("blockId")
+        block = blocks_by_id.get(block_id)
+        if not block:
+            result.failed.append({"decision_id": d.get("id"), "reason": f"block '{block_id}' not found in source map"})
+            continue
+
+        block_offset = block.get("char_offset", 0)
+        block_text = block.get("text", "")
+        local_start = d.get("start", 0)
+        local_end = d.get("end", 0)
+
+        # Validate bounds
+        if local_start < 0 or local_start >= local_end:
+            result.failed.append({"decision_id": d.get("id"), "reason": f"invalid range [{local_start}:{local_end}]"})
+            continue
+        if local_end > len(block_text):
+            result.failed.append({"decision_id": d.get("id"), "reason": f"end {local_end} exceeds block text length {len(block_text)}"})
+            continue
+
+        doc_start = block_offset + local_start
+        doc_end = block_offset + local_end
+        original = full_text[doc_start:doc_end]
+
+        if not original.strip():
+            result.failed.append({"decision_id": d.get("id"), "reason": "empty text at position"})
+            continue
+
+        entity_type = d.get("entityType", "")
+        replacement = _mask_value(original, entity_type)
+
+        spans.append((doc_start, doc_end, d, original, replacement))
+
+    # Check for overlaps
+    spans.sort(key=lambda s: s[0])
+    for i in range(1, len(spans)):
+        if spans[i][0] < spans[i - 1][1]:
+            result.failed.append({
+                "decision_id": spans[i][2].get("id"),
+                "reason": f"overlaps with decision {spans[i-1][2].get('id')} at [{spans[i-1][0]}:{spans[i-1][1]}]"
+            })
+
+    # If any failures, abort
+    if result.failed:
+        map_data = {
+            "schema_version": "1.0",
+            "source_file": Path(source_path).name,
+            "redacted_file": "",
+            "source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+            "entities": [],
+            "occurrences": [],
+        }
+        return map_data, result
+
+    # Build redacted text
     parts = []
     cursor = 0
-    occurrences = []
-    entities = []
 
-    for span in spans:
-        if span["start"] < cursor:
-            continue  # Skip overlapping
-        parts.append(full_text[cursor:span["start"]])
+    for doc_start, doc_end, d, original, replacement in spans:
+        parts.append(full_text[cursor:doc_start])
         red_start = sum(len(p) for p in parts)
-        parts.append(span["replacement"])
+        parts.append(replacement)
         red_end = sum(len(p) for p in parts)
 
-        occurrences.append({
-            "entity_id": span["entity_id"],
+        entity_id = f"decision_{d.get('id', len(result.entities))}"
+        entity_type = d.get("entityType", "")
+
+        result.entities.append({
+            "id": entity_id,
+            "entity_type": entity_type or "MANUAL",
+            "original": original,
+            "replacement": replacement,
+            "engines": ["decision"],
+        })
+        result.occurrences.append({
+            "entity_id": entity_id,
             "engine": "decision",
-            "original_start": span["start"],
-            "original_end": span["end"],
+            "original_start": doc_start,
+            "original_end": doc_end,
             "redacted_start": red_start,
             "redacted_end": red_end,
         })
-        entities.append({
-            "id": span["entity_id"],
-            "entity_type": "MANUAL",
-            "original": span["original"],
-            "replacement": span["replacement"],
-            "engines": ["decision"],
+        result.applied.append({
+            "decision_id": d.get("id"),
+            "original_start": doc_start,
+            "original_end": doc_end,
+            "redacted_start": red_start,
+            "redacted_end": red_end,
+            "entity_id": entity_id,
         })
-        cursor = span["end"]
+        cursor = doc_end
 
     parts.append(full_text[cursor:])
     redacted_text = "".join(parts)
 
-    # Write output
     Path(output_path).write_text(redacted_text, encoding="utf-8")
 
     source_sha = hashlib.sha256(source_bytes).hexdigest()
     redacted_sha = hashlib.sha256(redacted_text.encode("utf-8")).hexdigest()
 
-    return {
+    map_data = {
         "schema_version": "1.0",
         "source_file": Path(source_path).name,
         "redacted_file": Path(output_path).name,
         "source_sha256": source_sha,
         "redacted_sha256": redacted_sha,
-        "entities": entities,
-        "occurrences": occurrences,
+        "entities": result.entities,
+        "occurrences": result.occurrences,
     }
+    return map_data, result
 
 
 def apply_decisions_docx(
@@ -200,30 +234,65 @@ def apply_decisions_docx(
     output_path: str,
     decisions: List[dict],
     blocks: List[dict],
-) -> dict:
+) -> Tuple[dict, DecisionApplicationResult]:
     """Apply decisions to a DOCX file.
 
-    Uses OOXML paragraph-level modification via the DOCX adapter.
-    Returns map_data dict.
+    Returns (map_data, application_result).
+    Every 'redact' decision must produce an entity.
     """
     from .adapters.docx_adapter import (
-        DOCXAdapter, _is_text_part, _paragraphs,
+        _is_text_part, _paragraphs,
         _extract_paragraph_runs_text, _rebuild_paragraph_with_redactions,
     )
     from lxml import etree
     import zipfile
 
-    # Build block → paragraph index mapping
-    block_para_map: Dict[str, List[dict]] = {}
-    for d in decisions:
-        if d.get("action") != "redact":
+    result = DecisionApplicationResult()
+    blocks_by_id = {b["id"]: b for b in blocks}
+
+    # Validate all redact decisions
+    redact_decisions = [d for d in decisions if d.get("action") == "redact"]
+
+    # Group by paragraph using sourceLocator
+    para_decisions: Dict[str, List[Tuple[dict, dict]]] = {}  # "part:para_idx" → [(decision, block)]
+    for d in redact_decisions:
+        block_id = d.get("blockId")
+        block = blocks_by_id.get(block_id)
+        if not block:
+            result.failed.append({"decision_id": d.get("id"), "reason": f"block '{block_id}' not found"})
             continue
-        locator = d.get("sourceLocator", {})
+
+        locator = d.get("sourceLocator") or block.get("sourceLocator", {})
         part = locator.get("part", "word/document.xml")
         para_idx = locator.get("paragraph_index")
-        if para_idx is not None:
-            key = f"{part}:{para_idx}"
-            block_para_map.setdefault(key, []).append(d)
+        if para_idx is None:
+            result.failed.append({"decision_id": d.get("id"), "reason": "missing paragraph_index in sourceLocator"})
+            continue
+
+        local_start = d.get("start", 0)
+        local_end = d.get("end", 0)
+        block_text = block.get("text", "")
+
+        if local_start < 0 or local_start >= local_end:
+            result.failed.append({"decision_id": d.get("id"), "reason": f"invalid range [{local_start}:{local_end}]"})
+            continue
+        if local_end > len(block_text):
+            result.failed.append({"decision_id": d.get("id"), "reason": f"end {local_end} exceeds block text length {len(block_text)}"})
+            continue
+
+        key = f"{part}:{para_idx}"
+        para_decisions.setdefault(key, []).append((d, block))
+
+    if result.failed:
+        map_data = {
+            "schema_version": "1.0",
+            "source_file": Path(source_path).name,
+            "redacted_file": "",
+            "source_sha256": hashlib.sha256(Path(source_path).read_bytes()).hexdigest(),
+            "entities": [],
+            "occurrences": [],
+        }
+        return map_data, result
 
     # Read source DOCX
     with zipfile.ZipFile(source_path, "r") as zf:
@@ -235,48 +304,63 @@ def apply_decisions_docx(
         if _is_text_part(name)
     }
 
-    all_entities = []
-    all_occurrences = []
-    entity_counters: Dict[str, int] = {}
-
     for part_name, tree in text_trees.items():
         for para_idx, child in enumerate(_paragraphs(tree)):
             key = f"{part_name}:{para_idx}"
-            para_decisions = block_para_map.get(key, [])
-            if not para_decisions:
+            decisions_for_para = para_decisions.get(key, [])
+            if not decisions_for_para:
                 continue
 
             para_text, run_metas = _extract_paragraph_runs_text(child)
             if not para_text.strip():
+                for d, _ in decisions_for_para:
+                    result.failed.append({"decision_id": d.get("id"), "reason": f"paragraph {para_idx} is empty"})
                 continue
 
-            # Build spans from decisions
+            # Check for overlaps within this paragraph
+            sorted_ds = sorted(decisions_for_para, key=lambda x: x[0].get("start", 0))
+            for i in range(1, len(sorted_ds)):
+                prev_end = sorted_ds[i - 1][0].get("end", 0)
+                curr_start = sorted_ds[i][0].get("start", 0)
+                if curr_start < prev_end:
+                    result.failed.append({
+                        "decision_id": sorted_ds[i][0].get("id"),
+                        "reason": f"overlaps with decision {sorted_ds[i-1][0].get('id')} in paragraph {para_idx}"
+                    })
+
+            if result.failed:
+                continue
+
             spans_for_para = []
-            for d in para_decisions:
+            for d, block in decisions_for_para:
                 local_start = d.get("start", 0)
                 local_end = d.get("end", 0)
-                if local_start < 0 or local_end > len(para_text) or local_start >= local_end:
-                    continue
-
                 original = para_text[local_start:local_end]
                 entity_type = d.get("entityType", "")
                 replacement = _mask_value(original, entity_type)
 
-                entity_id = f"decision_{d.get('id', len(all_entities))}"
-                all_entities.append({
+                entity_id = f"decision_{d.get('id', len(result.entities))}"
+                result.entities.append({
                     "id": entity_id,
                     "entity_type": entity_type or "MANUAL",
                     "original": original,
                     "replacement": replacement,
                     "engines": ["decision"],
                 })
-                all_occurrences.append({
+                result.occurrences.append({
                     "entity_id": entity_id,
                     "engine": "decision",
                     "original_start": local_start,
                     "original_end": local_end,
                     "paragraph_index": para_idx,
                     "part": part_name,
+                })
+                result.applied.append({
+                    "decision_id": d.get("id"),
+                    "entity_id": entity_id,
+                    "paragraph": para_idx,
+                    "original_start": local_start,
+                    "original_end": local_end,
                 })
 
                 spans_for_para.append({
@@ -291,6 +375,17 @@ def apply_decisions_docx(
                     child, para_text, run_metas, spans_for_para,
                 )
 
+    if result.failed:
+        map_data = {
+            "schema_version": "1.0",
+            "source_file": Path(source_path).name,
+            "redacted_file": "",
+            "source_sha256": hashlib.sha256(Path(source_path).read_bytes()).hexdigest(),
+            "entities": [],
+            "occurrences": [],
+        }
+        return map_data, result
+
     # Write modified DOCX
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for name, data in package_files.items():
@@ -300,11 +395,12 @@ def apply_decisions_docx(
                 zf.writestr(name, data)
 
     source_sha = hashlib.sha256(Path(source_path).read_bytes()).hexdigest()
-    return {
+    map_data = {
         "schema_version": "1.0",
         "source_file": Path(source_path).name,
         "redacted_file": Path(output_path).name,
         "source_sha256": source_sha,
-        "entities": all_entities,
-        "occurrences": all_occurrences,
+        "entities": result.entities,
+        "occurrences": result.occurrences,
     }
+    return map_data, result

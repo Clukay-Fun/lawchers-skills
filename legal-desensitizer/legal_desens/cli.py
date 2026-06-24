@@ -145,23 +145,20 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
     # Apply decisions based on format
     if fmt in ("txt", "md"):
         try:
-            map_data = apply_decisions_text(args.input, args.out, decisions, blocks)
+            map_data, app_result = apply_decisions_text(args.input, args.out, decisions, blocks)
         except Exception as e:
             print(f"Error applying decisions to text: {e}", file=sys.stderr)
             return 1
 
     elif fmt == "docx":
         try:
-            map_data = apply_decisions_docx(args.input, args.out, decisions, blocks)
+            map_data, app_result = apply_decisions_docx(args.input, args.out, decisions, blocks)
         except Exception as e:
             print(f"Error applying decisions to DOCX: {e}", file=sys.stderr)
             return 1
 
     elif fmt == "irreversible":
         ext = Path(args.input).suffix.lower()
-        # P0: Block all PDF decisions until coordinate-based implementation exists
-        # - scan PDF: no text layer, needs polygon pixel redaction
-        # - text PDF: search_for matches ALL occurrences, not just decision position
         print(f"Error: PDF decisions export not yet implemented.\n"
               f"  Scan PDF requires polygon-based pixel redaction.\n"
               f"  Text PDF requires per-decision coordinate mapping.\n"
@@ -172,66 +169,77 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
         print(f"Error: format {fmt} not supported for decisions export", file=sys.stderr)
         return 1
 
+    # Fail closed if any decision failed to apply
+    if not app_result.all_applied:
+        for f in app_result.failed:
+            print(f"Error: decision {f['decision_id']} failed: {f['reason']}", file=sys.stderr)
+        Path(args.out).unlink(missing_ok=True)
+        print(f"Export rejected: {len(app_result.failed)} of {app_result.redact_requested} decisions failed.", file=sys.stderr)
+        return 1
+
     # Write map
     if args.map:
         with open(args.map, "w", encoding="utf-8") as f:
             json.dump(map_data, f, ensure_ascii=False, indent=2)
 
-    # P0: Real residual verification — verify every redact decision was applied
+    # P0: Real residual verification using applied positions
     residual_findings = []
-    if fmt in ("txt", "md"):
+    redact_decisions = [d for d in decisions if d.get("action") == "redact"]
+
+    # 1. Verify requested == applied == entities
+    if len(app_result.applied) != len(redact_decisions):
+        residual_findings.append({
+            "type": "count_mismatch",
+            "requested": len(redact_decisions),
+            "applied": len(app_result.applied),
+        })
+    if len(map_data.get("entities", [])) != len(app_result.applied):
+        residual_findings.append({
+            "type": "entity_count_mismatch",
+            "entities": len(map_data.get("entities", [])),
+            "applied": len(app_result.applied),
+        })
+
+    # 2. Verify each applied decision's position in the output
+    if fmt in ("txt", "md") and not residual_findings:
         from .io import read_text
         exported_text = read_text(args.out).text
-        for d in decisions:
-            if d.get("action") != "redact":
+        for applied in app_result.applied:
+            red_start = applied.get("redacted_start", 0)
+            red_end = applied.get("redacted_end", 0)
+            entity_id = applied.get("entity_id")
+            entity = next((e for e in map_data.get("entities", []) if e["id"] == entity_id), None)
+            if not entity:
+                residual_findings.append({"type": "entity_missing", "decision_id": applied.get("decision_id")})
                 continue
-            block_id = d.get("blockId")
-            block = next((b for b in blocks if b["id"] == block_id), None)
-            if not block:
-                continue
-            block_offset = block.get("char_offset", 0)
-            doc_start = block_offset + d.get("start", 0)
-            doc_end = block_offset + d.get("end", 0)
-            original = block["text"][d.get("start", 0):d.get("end", 0)]
-            if not original:
-                continue
-            # Check if original text still appears at the expected position
-            exported_segment = exported_text[doc_start:doc_end]
-            if exported_segment == original:
+            replacement = entity.get("replacement", "")
+            actual = exported_text[red_start:red_end]
+            if actual != replacement:
                 residual_findings.append({
-                    "type": "decision_not_applied",
-                    "decision_id": d.get("id"),
-                    "position": f"[{doc_start}:{doc_end}]",
-                    "text_preview": original[:20],
+                    "type": "replacement_mismatch",
+                    "decision_id": applied.get("decision_id"),
+                    "expected": replacement[:20],
+                    "actual": actual[:20],
+                    "position": f"[{red_start}:{red_end}]",
                 })
-    elif fmt == "docx":
-        # Verify DOCX by extracting text and checking each decision position
+
+    elif fmt == "docx" and not residual_findings:
         from .adapters.docx_adapter import DOCXAdapter
         adapter = DOCXAdapter()
         exported_text, _ = adapter.extract_text(args.out)
-        # Build block offset map from source map
-        for d in decisions:
-            if d.get("action") != "redact":
+        for applied in app_result.applied:
+            entity_id = applied.get("entity_id")
+            entity = next((e for e in map_data.get("entities", []) if e["id"] == entity_id), None)
+            if not entity:
+                residual_findings.append({"type": "entity_missing", "decision_id": applied.get("decision_id")})
                 continue
-            block_id = d.get("blockId")
-            block = next((b for b in blocks if b["id"] == block_id), None)
-            if not block:
-                continue
-            block_offset = block.get("char_offset", 0)
-            doc_start = block_offset + d.get("start", 0)
-            doc_end = block_offset + d.get("end", 0)
-            original = block["text"][d.get("start", 0):d.get("end", 0)]
-            if not original or len(original) < 2:
-                continue
-            # Check if original text still appears at the position in exported DOCX
-            if doc_end <= len(exported_text):
-                exported_segment = exported_text[doc_start:doc_end]
-                if exported_segment == original:
-                    residual_findings.append({
-                        "type": "decision_not_applied",
-                        "decision_id": d.get("id"),
-                        "text_preview": original[:20],
-                    })
+            original = entity.get("original", "")
+            if len(original) >= 2 and original in exported_text:
+                residual_findings.append({
+                    "type": "original_found_in_export",
+                    "decision_id": applied.get("decision_id"),
+                    "text_preview": original[:20],
+                })
 
     residual_passed = len(residual_findings) == 0
 
@@ -242,11 +250,13 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
             "summary": {
                 "total_entities": len(map_data.get("entities", [])),
                 "total_occurrences": len(map_data.get("occurrences", [])),
+                "redact_requested": app_result.redact_requested,
+                "redact_applied": app_result.redact_applied,
             },
             "residual_scan": {
                 "passed": residual_passed,
                 "findings": residual_findings,
-                "method": "position_verification",
+                "method": "applied_position_verification",
             },
             "export_mode": "decisions",
         }
@@ -254,15 +264,13 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
             json.dump(audit_data, f, ensure_ascii=False, indent=2)
 
     if not residual_passed:
-        # Clean up failed export
         Path(args.out).unlink(missing_ok=True)
-        print(f"Error: {len(residual_findings)} redact decisions were not applied. Export rejected.", file=sys.stderr)
-        for f in residual_findings[:3]:
-            print(f"  - {f.get('type')}: '{f.get('text_preview')}' at {f.get('position', '?')}", file=sys.stderr)
+        print(f"Error: residual verification failed ({len(residual_findings)} findings). Export rejected.", file=sys.stderr)
+        for f in residual_findings[:5]:
+            print(f"  - {f.get('type')}: {f}", file=sys.stderr)
         return 1
 
-    n_redact = sum(1 for d in decisions if d.get("action") == "redact")
-    print(f"Decisions export complete: {n_redact} positions redacted, mode={fmt}", file=sys.stderr)
+    print(f"Decisions export complete: {app_result.redact_applied}/{app_result.redact_requested} applied, mode={fmt}", file=sys.stderr)
     return 0
 
 
