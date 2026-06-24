@@ -305,6 +305,16 @@ def redact(
     bank_spans, bank_warnings = detect_bank_accounts(text, spans)
     spans.extend(bank_spans)
 
+    # B1 fix: filter out TIME spans that are fully contained within MONEY spans.
+    # This prevents year-like numbers in amounts (e.g., 2023元) from being
+    # split into separate TIME and MONEY entities.
+    money_spans = [s for s in spans if s.entity_type == "MONEY"]
+    if money_spans:
+        spans = [s for s in spans if not (
+            s.entity_type == "TIME"
+            and any(m.start <= s.start and m.end >= s.end for m in money_spans)
+        )]
+
     # Merge
     kept, discarded = merge_spans(spans)
 
@@ -371,6 +381,15 @@ def redact(
                 filtered_addresses.append(span)
 
         kept_for_redact = non_address_spans + filtered_addresses
+
+    # Filter out overly short generic ADDRESS spans (e.g. "场所") to prevent layout overlaps
+    purified_kept = []
+    for span in kept_for_redact:
+        if span.entity_type == "ADDRESS" and len(span.text) <= 3:
+            if not any(c in span.text for c in "省市区县镇乡路街号村"):
+                continue
+        purified_kept.append(span)
+    kept_for_redact = purified_kept
 
     # Allocate labels
     allocator = LabelAllocator(rules, profile=profile)

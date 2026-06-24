@@ -7,7 +7,7 @@ import hashlib
 import json
 import sys
 from pathlib import Path
-from typing import TextIO
+from typing import Dict, List, TextIO
 
 from .audit import audit
 from .io import read_text, write_text
@@ -107,11 +107,227 @@ def _load_map_file(path: str) -> dict:
         raise ValueError(f"Unable to read map file: {path} ({e})")
 
 
+def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) -> int:
+    """Apply reviewed decisions directly to a document.
+
+    Bypasses auto-detection (regex/NER). Only positions specified in
+    decisions are modified. 'keep' decisions are never touched.
+    """
+    from .decisions_apply import apply_decisions_text, apply_decisions_docx, _load_decisions, _load_source_map
+
+    try:
+        decisions = _load_decisions(decisions_file)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading decisions: {e}", file=sys.stderr)
+        return 1
+
+    # Load source map to get blocks
+    source_map_file = getattr(args, "source_map", None)
+    if not source_map_file:
+        print("Error: --source-map is required with --decisions", file=sys.stderr)
+        return 1
+
+    try:
+        source_map = _load_source_map(source_map_file)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading source map: {e}", file=sys.stderr)
+        return 1
+
+    blocks = source_map.get("blocks", [])
+    if not blocks:
+        print("Error: source map has no blocks", file=sys.stderr)
+        return 1
+
+    if not args.out:
+        print("Error: --out is required with --decisions", file=sys.stderr)
+        return 1
+
+    # Apply decisions based on format
+    if fmt in ("txt", "md"):
+        try:
+            map_data = apply_decisions_text(args.input, args.out, decisions, blocks)
+        except Exception as e:
+            print(f"Error applying decisions to text: {e}", file=sys.stderr)
+            return 1
+
+    elif fmt == "docx":
+        try:
+            map_data = apply_decisions_docx(args.input, args.out, decisions, blocks)
+        except Exception as e:
+            print(f"Error applying decisions to DOCX: {e}", file=sys.stderr)
+            return 1
+
+    elif fmt == "irreversible":
+        ext = Path(args.input).suffix.lower()
+        if ext == ".pdf":
+            # PDF: use fitz to apply decisions page by page
+            try:
+                map_data = _apply_decisions_pdf(args.input, args.out, decisions, blocks)
+            except Exception as e:
+                print(f"Error applying decisions to PDF: {e}", file=sys.stderr)
+                return 1
+        else:
+            print(f"Error: {ext} decisions export not supported", file=sys.stderr)
+            return 1
+    else:
+        print(f"Error: format {fmt} not supported for decisions export", file=sys.stderr)
+        return 1
+
+    # Write map
+    if args.map:
+        with open(args.map, "w", encoding="utf-8") as f:
+            json.dump(map_data, f, ensure_ascii=False, indent=2)
+
+    # Write audit
+    if args.audit:
+        from .audit import audit as run_audit
+        rules_for_audit = load_rules(args.rules)
+        # For text formats, run residual scan
+        if fmt in ("txt", "md"):
+            from .io import read_text
+            from .profile import load_profile
+            tf = read_text(args.out)
+            profile_name = map_data.get("profile", "strict")
+            try:
+                profile = load_profile(profile_name)
+            except FileNotFoundError:
+                profile = None
+            residual = run_audit(tf.text, map_data, rules_for_audit, profile=profile)
+        else:
+            # For DOCX/PDF, residual scan is format-specific
+            residual = {"passed": True, "note": "decision-based export, no auto-scan"}
+
+        audit_data = {
+            "schema_version": "1.0",
+            "summary": {
+                "total_entities": len(map_data.get("entities", [])),
+                "total_occurrences": len(map_data.get("occurrences", [])),
+            },
+            "residual_scan": residual,
+            "export_mode": "decisions",
+        }
+        with open(args.audit, "w", encoding="utf-8") as f:
+            json.dump(audit_data, f, ensure_ascii=False, indent=2)
+
+    n_redact = sum(1 for d in decisions if d.get("action") == "redact")
+    print(f"Decisions export complete: {n_redact} positions redacted, mode={fmt}", file=sys.stderr)
+    return 0
+
+
+def _apply_decisions_pdf(pdf_path: str, output_path: str, decisions: List[dict], blocks: List[dict]) -> dict:
+    """Apply decisions to a text-layer PDF using fitz."""
+    try:
+        import fitz
+    except ImportError:
+        raise ImportError("PyMuPDF required for PDF decisions export: pip install legal-desens[pdf]")
+
+    # Group decisions by page
+    blocks_by_id = {b["id"]: b for b in blocks}
+    page_decisions: Dict[int, List[dict]] = {}
+
+    for d in decisions:
+        if d.get("action") != "redact":
+            continue
+        locator = d.get("sourceLocator", {})
+        page_num = locator.get("page")
+        if page_num is None:
+            # Try to find page from block
+            block = blocks_by_id.get(d.get("blockId"))
+            if block:
+                page_num = block.get("sourceLocator", {}).get("page")
+        if page_num is not None:
+            page_decisions.setdefault(page_num, []).append(d)
+
+    doc = fitz.open(pdf_path)
+    entities = []
+    occurrences = []
+
+    for page_number, page_dcs in page_decisions.items():
+        if page_number < 1 or page_number > len(doc):
+            continue
+        page = doc[page_number - 1]
+        page_text = page.get_text()
+        if not page_text.strip():
+            continue
+
+        for d in page_dcs:
+            block = blocks_by_id.get(d.get("blockId"))
+            if not block:
+                continue
+
+            original = block["text"][d["start"]:d["end"]]
+            if not original:
+                continue
+
+            # Search for the text on this page
+            rects = page.search_for(original)
+            for rect in rects:
+                page.add_redact_annot(rect, fill=(1, 1, 1))
+
+            entity_type = d.get("entityType", "")
+            replacement = _mask_value(original, entity_type)
+
+            entity_id = f"decision_{d.get('id', len(entities))}"
+            entities.append({
+                "id": entity_id,
+                "entity_type": entity_type or "MANUAL",
+                "original": original,
+                "replacement": replacement,
+                "engines": ["decision"],
+            })
+
+            for rect in rects:
+                occurrences.append({
+                    "entity_id": entity_id,
+                    "engine": "decision",
+                    "page": page_number,
+                    "rectangles": [list(rect)],
+                })
+
+        if page_dcs:
+            page.apply_redactions()
+            # Insert replacement text
+            for d in page_dcs:
+                block = blocks_by_id.get(d.get("blockId"))
+                if not block:
+                    continue
+                original = block["text"][d["start"]:d["end"]]
+                entity_type = d.get("entityType", "")
+                replacement = _mask_value(original, entity_type)
+                rects = page.search_for(original)
+                for rect in rects:
+                    page.insert_text(
+                        (rect.x0, rect.y1 - 2),
+                        replacement,
+                        fontname="china-s",
+                        fontsize=max(4, min(10, rect.height * 0.75)),
+                        color=(0, 0, 0),
+                    )
+
+    doc.save(output_path, garbage=4, clean=True, deflate=True)
+    doc.close()
+
+    source_sha = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
+    return {
+        "schema_version": "1.0",
+        "source_file": Path(pdf_path).name,
+        "redacted_file": Path(output_path).name,
+        "source_sha256": source_sha,
+        "entities": entities,
+        "occurrences": occurrences,
+    }
+
+
 def _cmd_redact(args: argparse.Namespace) -> int:
     from .engine.allowlist import load_allowlist
 
     rules = load_rules(args.rules)
     fmt = _detect_format(args.input)
+
+    # ── decisions mode: apply reviewed decisions directly, skip auto-detection ──
+    decisions_file = getattr(args, "decisions", None)
+    if decisions_file:
+        return _apply_decisions(args, fmt, decisions_file)
 
     # Resolve profile
     profile_name = resolve_profile_name(
@@ -685,6 +901,68 @@ def _cmd_ner_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_prepare(args: argparse.Namespace) -> int:
+    """Prepare: document → preview Markdown + manifest + source map for review."""
+    from .engine.allowlist import load_allowlist
+    from .prepare import prepare
+
+    rules = load_rules(args.rules)
+
+    # Resolve profile
+    profile_name = resolve_profile_name(
+        getattr(args, "profile", None),
+        getattr(args, "level", "strict"),
+    )
+    try:
+        profile = load_profile(profile_name)
+    except FileNotFoundError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    mode = "regex-only" if getattr(args, "regex_only", False) else "regex+ner"
+
+    try:
+        manifest, preview_md, source_map_json = prepare(
+            source_path=args.input,
+            rules=rules,
+            level=getattr(args, "level", "strict"),
+            mode=mode,
+            model_dir=getattr(args, "model_dir", None),
+            profile=profile,
+        )
+    except (RuntimeError, FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Write outputs
+    if args.preview_md:
+        Path(args.preview_md).write_text(preview_md, encoding="utf-8")
+        print(f"Preview: {args.preview_md}", file=sys.stderr)
+
+    if args.manifest:
+        with open(args.manifest, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        print(f"Manifest: {args.manifest}", file=sys.stderr)
+
+    if args.map:
+        Path(args.map).write_text(source_map_json, encoding="utf-8")
+        print(f"Source map: {args.map}", file=sys.stderr)
+
+    if not args.preview_md and not args.manifest and not args.map:
+        # Default: output manifest to stdout
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    n_candidates = len(manifest.get("candidates", []))
+    n_blocks = len(manifest.get("blocks", []))
+    doc_kind = manifest.get("documentKind", "unknown")
+    print(
+        f"Prepare complete: {doc_kind}, {n_blocks} blocks, "
+        f"{n_candidates} candidates detected, mode={mode}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_batch_redact_case(args: argparse.Namespace) -> int:
     """Batch case redaction orchestrator."""
     from .batch import BatchError, batch_redact_case
@@ -782,6 +1060,10 @@ def main(argv=None):
     p_redact.add_argument("--out", help="Output redacted file")
     p_redact.add_argument("--map", help="Output map JSON file")
     p_redact.add_argument("--audit", help="Output audit JSON file")
+    p_redact.add_argument("--decisions", default=None,
+                          help="Path to decisions JSON file (bypasses auto-detection)")
+    p_redact.add_argument("--source-map", default=None,
+                          help="Path to source-map JSON from prepare (required with --decisions)")
 
     # ── restore ──
     p_restore = sub.add_parser("restore", help="Restore redacted document using map")
@@ -902,6 +1184,27 @@ def main(argv=None):
     p_batch.add_argument("--regex-only", action="store_true", default=False,
                          help="Explicitly use only regex engine and skip NER pre-check")
 
+    # ── prepare ──
+    p_prepare = sub.add_parser(
+        "prepare",
+        help="Prepare document for review: extract blocks, detect candidates, generate preview",
+    )
+    p_prepare.add_argument("input", help="Input document (.docx, .pdf, .txt, .md)")
+    p_prepare.add_argument("--profile", default=None, choices=["labor", "strict"],
+                           help="Redaction profile (default: labor)")
+    p_prepare.add_argument("--level", default="strict", choices=["labor", "strict"],
+                           help="Redaction level (default: strict)")
+    p_prepare.add_argument("--regex-only", action="store_true", default=False,
+                           help="Use only regex engine (skip NER)")
+    p_prepare.add_argument("--model-dir", default=None,
+                           help="Path to NER model directory")
+    p_prepare.add_argument("--preview-md", default=None,
+                           help="Output preview Markdown file")
+    p_prepare.add_argument("--manifest", default=None,
+                           help="Output manifest JSON file")
+    p_prepare.add_argument("--map", default=None,
+                           help="Output source map JSON file")
+
     args = parser.parse_args(argv)
 
     if args.command is None:
@@ -918,6 +1221,7 @@ def main(argv=None):
         "redact-scan": _cmd_redact_scan,
         "parse": _cmd_parse,
         "batch-redact-case": _cmd_batch_redact_case,
+        "prepare": _cmd_prepare,
     }
 
     handler = handlers.get(args.command)
