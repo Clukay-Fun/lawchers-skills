@@ -159,16 +159,15 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
 
     elif fmt == "irreversible":
         ext = Path(args.input).suffix.lower()
-        if ext == ".pdf":
-            # PDF: use fitz to apply decisions page by page
-            try:
-                map_data = _apply_decisions_pdf(args.input, args.out, decisions, blocks)
-            except Exception as e:
-                print(f"Error applying decisions to PDF: {e}", file=sys.stderr)
-                return 1
-        else:
-            print(f"Error: {ext} decisions export not supported", file=sys.stderr)
-            return 1
+        # P0: Block all PDF decisions until coordinate-based implementation exists
+        # - scan PDF: no text layer, needs polygon pixel redaction
+        # - text PDF: search_for matches ALL occurrences, not just decision position
+        print(f"Error: PDF decisions export not yet implemented.\n"
+              f"  Scan PDF requires polygon-based pixel redaction.\n"
+              f"  Text PDF requires per-decision coordinate mapping.\n"
+              f"  Use the legacy /api/export/redacted endpoint for PDF files.",
+              file=sys.stderr)
+        return 1
     else:
         print(f"Error: format {fmt} not supported for decisions export", file=sys.stderr)
         return 1
@@ -178,36 +177,89 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
         with open(args.map, "w", encoding="utf-8") as f:
             json.dump(map_data, f, ensure_ascii=False, indent=2)
 
+    # P0: Real residual verification — verify every redact decision was applied
+    residual_findings = []
+    if fmt in ("txt", "md"):
+        from .io import read_text
+        exported_text = read_text(args.out).text
+        for d in decisions:
+            if d.get("action") != "redact":
+                continue
+            block_id = d.get("blockId")
+            block = next((b for b in blocks if b["id"] == block_id), None)
+            if not block:
+                continue
+            block_offset = block.get("char_offset", 0)
+            doc_start = block_offset + d.get("start", 0)
+            doc_end = block_offset + d.get("end", 0)
+            original = block["text"][d.get("start", 0):d.get("end", 0)]
+            if not original:
+                continue
+            # Check if original text still appears at the expected position
+            exported_segment = exported_text[doc_start:doc_end]
+            if exported_segment == original:
+                residual_findings.append({
+                    "type": "decision_not_applied",
+                    "decision_id": d.get("id"),
+                    "position": f"[{doc_start}:{doc_end}]",
+                    "text_preview": original[:20],
+                })
+    elif fmt == "docx":
+        # Verify DOCX by extracting text and checking each decision position
+        from .adapters.docx_adapter import DOCXAdapter
+        adapter = DOCXAdapter()
+        exported_text, _ = adapter.extract_text(args.out)
+        # Build block offset map from source map
+        for d in decisions:
+            if d.get("action") != "redact":
+                continue
+            block_id = d.get("blockId")
+            block = next((b for b in blocks if b["id"] == block_id), None)
+            if not block:
+                continue
+            block_offset = block.get("char_offset", 0)
+            doc_start = block_offset + d.get("start", 0)
+            doc_end = block_offset + d.get("end", 0)
+            original = block["text"][d.get("start", 0):d.get("end", 0)]
+            if not original or len(original) < 2:
+                continue
+            # Check if original text still appears at the position in exported DOCX
+            if doc_end <= len(exported_text):
+                exported_segment = exported_text[doc_start:doc_end]
+                if exported_segment == original:
+                    residual_findings.append({
+                        "type": "decision_not_applied",
+                        "decision_id": d.get("id"),
+                        "text_preview": original[:20],
+                    })
+
+    residual_passed = len(residual_findings) == 0
+
     # Write audit
     if args.audit:
-        from .audit import audit as run_audit
-        rules_for_audit = load_rules(args.rules)
-        # For text formats, run residual scan
-        if fmt in ("txt", "md"):
-            from .io import read_text
-            from .profile import load_profile
-            tf = read_text(args.out)
-            profile_name = map_data.get("profile", "strict")
-            try:
-                profile = load_profile(profile_name)
-            except FileNotFoundError:
-                profile = None
-            residual = run_audit(tf.text, map_data, rules_for_audit, profile=profile)
-        else:
-            # For DOCX/PDF, residual scan is format-specific
-            residual = {"passed": True, "note": "decision-based export, no auto-scan"}
-
         audit_data = {
             "schema_version": "1.0",
             "summary": {
                 "total_entities": len(map_data.get("entities", [])),
                 "total_occurrences": len(map_data.get("occurrences", [])),
             },
-            "residual_scan": residual,
+            "residual_scan": {
+                "passed": residual_passed,
+                "findings": residual_findings,
+                "method": "position_verification",
+            },
             "export_mode": "decisions",
         }
         with open(args.audit, "w", encoding="utf-8") as f:
             json.dump(audit_data, f, ensure_ascii=False, indent=2)
+
+    if not residual_passed:
+        # Clean up failed export
+        Path(args.out).unlink(missing_ok=True)
+        print(f"Error: {len(residual_findings)} redact decisions were not applied. Export rejected.", file=sys.stderr)
+        for f in residual_findings[:3]:
+            print(f"  - {f.get('type')}: '{f.get('text_preview')}' at {f.get('position', '?')}", file=sys.stderr)
+        return 1
 
     n_redact = sum(1 for d in decisions if d.get("action") == "redact")
     print(f"Decisions export complete: {n_redact} positions redacted, mode={fmt}", file=sys.stderr)

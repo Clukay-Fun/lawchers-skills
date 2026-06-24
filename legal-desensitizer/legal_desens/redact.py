@@ -305,15 +305,29 @@ def redact(
     bank_spans, bank_warnings = detect_bank_accounts(text, spans)
     spans.extend(bank_spans)
 
-    # B1 fix: filter out TIME spans that are fully contained within MONEY spans.
-    # This prevents year-like numbers in amounts (e.g., 2023元) from being
-    # split into separate TIME and MONEY entities.
-    money_spans = [s for s in spans if s.entity_type == "MONEY"]
-    if money_spans:
-        spans = [s for s in spans if not (
-            s.entity_type == "TIME"
-            and any(m.start <= s.start and m.end >= s.end for m in money_spans)
-        )]
+    # B1 fix: suppress MONEY spans that represent year+元年 patterns.
+    # "2023元年" should be TIME, not MONEY. Detect: MONEY text ends with 元,
+    # the character after 元 in the source text is 年, and the number portion
+    # looks like a year (4 digits starting with 19/20).
+    # Unlike the previous approach, this removes the MONEY span (not TIME),
+    # preserving 100元年费, 50元日薪, 200元月租 which have non-年 after 元.
+    money_to_remove = set()
+    for i, s in enumerate(spans):
+        if s.entity_type != "MONEY":
+            continue
+        money_text = s.text
+        if not money_text.endswith("元"):
+            continue
+        # Check if character after 元 in source text is 年
+        after_pos = s.end
+        if after_pos < len(text) and text[after_pos] == "年":
+            # Check if number portion looks like a year
+            number_part = money_text[:-1]  # strip 元
+            if len(number_part) == 4 and number_part[:2] in ("19", "20") and number_part.isdigit():
+                money_to_remove.add(i)
+
+    if money_to_remove:
+        spans = [s for i, s in enumerate(spans) if i not in money_to_remove]
 
     # Merge
     kept, discarded = merge_spans(spans)
