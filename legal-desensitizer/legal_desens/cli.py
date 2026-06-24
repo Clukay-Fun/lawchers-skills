@@ -1037,7 +1037,10 @@ def _cmd_prepare(args: argparse.Namespace) -> int:
         getattr(args, "level", "strict"),
     )
     try:
-        profile = load_profile(profile_name)
+        profile = load_profile(
+            profile_name,
+            entity_policy_file=getattr(args, "entity_policy", None),
+        )
     except FileNotFoundError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
@@ -1321,6 +1324,8 @@ def main(argv=None):
                            help="Use only regex engine (skip NER)")
     p_prepare.add_argument("--model-dir", default=None,
                            help="Path to NER model directory")
+    p_prepare.add_argument("--entity-policy", default=None,
+                           help="Path to entity_policy JSON file (local, not in git)")
     p_prepare.add_argument("--preview-md", default=None,
                            help="Output preview Markdown file")
     p_prepare.add_argument("--manifest", default=None,

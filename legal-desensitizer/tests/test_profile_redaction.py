@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 
 import pytest
@@ -12,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from legal_desens.io import read_text
 from legal_desens.rules import load_rules
 from legal_desens.profile import load_profile, resolve_profile_name
-from legal_desens.redact import redact, LabelAllocator
+from legal_desens.redact import redact, LabelAllocator, _scan_time_expressions
 from legal_desens.restore import restore
 from legal_desens.audit import audit
 from legal_desens.engine.span import Span
@@ -112,6 +113,44 @@ class TestBracketLabels:
 # ── 3. Redact/preserve split ──────────────────────────────────────────────
 
 class TestRedactPreserve:
+    @pytest.mark.parametrize("date_text", [
+        "2026年6月20日",
+        "2026 年 6 月 20 日",
+        "2026-06-20",
+        "2026/6/20",
+        "2026年6月",
+    ])
+    def test_time_detection_uses_complete_date(self, date_text):
+        spans = _scan_time_expressions(f"日期为{date_text}。")
+        assert [span.text for span in spans] == [date_text]
+
+    def test_prepare_entity_policy_preserves_dates(self, tmp_path):
+        source = tmp_path / "source.txt"
+        source.write_text("入职日期为2026年6月20日。", encoding="utf-8")
+        policy = tmp_path / "policy.json"
+        policy.write_text(
+            json.dumps({"preserve_types": ["DATE", "TIME"]}),
+            encoding="utf-8",
+        )
+        manifest = tmp_path / "manifest.json"
+
+        result = subprocess.run(
+            [
+                sys.executable, "-m", "legal_desens.cli", "prepare",
+                str(source), "--level", "strict", "--regex-only",
+                "--entity-policy", str(policy), "--manifest", str(manifest),
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, result.stderr
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        assert not any(
+            candidate["entityType"] in {"DATE", "TIME"}
+            for candidate in data["candidates"]
+        )
+
     def test_labor_preserves_time(self, rules, labor):
         text = "申请人于2022年9月1日入职。"
         source_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
