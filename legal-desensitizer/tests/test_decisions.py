@@ -24,16 +24,29 @@ def _make_docx(tmp_path, name, paragraphs):
         pytest.skip("python-docx not installed")
 
     doc = Document()
-    for text, bold_ranges in paragraphs:
+    for para_spec in paragraphs:
+        if isinstance(para_spec, tuple):
+            text, bold_ranges = para_spec
+            run_specs = None
+        else:
+            text = para_spec["text"]
+            bold_ranges = para_spec.get("bold_ranges", [])
+            run_specs = para_spec.get("runs")
+
         p = doc.add_paragraph()
-        # Build runs with mixed formatting
-        if bold_ranges:
-            # Sort bold ranges
+
+        if run_specs:
+            # Explicit run specification for cross-run testing
+            for run_text, is_bold in run_specs:
+                run = p.add_run(run_text)
+                if is_bold:
+                    run.bold = True
+        elif bold_ranges:
             sorted_ranges = sorted(bold_ranges, key=lambda r: r[0])
             pos = 0
             for bs, be in sorted_ranges:
                 if bs > pos:
-                    run = p.add_run(text[pos:bs])
+                    p.add_run(text[pos:bs])
                 run = p.add_run(text[bs:be])
                 run.bold = True
                 pos = be
@@ -69,6 +82,24 @@ def formatted_docx_file(tmp_path):
     """DOCX with mixed bold/normal formatting."""
     return _make_docx(tmp_path, "formatted.docx", [
         ("张三于2026年6月20日入职，月工资15000元。", [(0, 2)]),  # 张三 bold
+    ])
+
+
+@pytest.fixture
+def cross_run_docx(tmp_path):
+    """DOCX with '15000' in one run and '元' in the next (cross-run MONEY)."""
+    return _make_docx(tmp_path, "cross_run.docx", [
+        {"text": "工资15000元/月", "runs": [
+            ("工资", False), ("15000", True), ("元/月", False),
+        ]},
+    ])
+
+
+@pytest.fixture
+def same_para_keep_redact_docx(tmp_path):
+    """DOCX with same amount in one paragraph: one redact, one keep."""
+    return _make_docx(tmp_path, "same_para.docx", [
+        ("赔偿金15000元，月薪15000元另计。", []),
     ])
 
 
@@ -441,18 +472,102 @@ class TestDecisionsDOCX:
             formatted_docx_file, decisions, tmp_path, source_map)
         assert rc == 0, f"export failed: {stderr}"
 
-        # Check that the output DOCX has bold runs
         try:
             from docx import Document
             doc = Document(str(out_path))
-            has_bold = False
-            for p in doc.paragraphs:
-                for run in p.runs:
-                    if run.bold:
-                        has_bold = True
+            has_bold = any(run.bold for p in doc.paragraphs for run in p.runs if run.bold)
             assert has_bold, "Bold formatting should be preserved in output"
         except ImportError:
             pytest.skip("python-docx not installed")
+
+    def test_docx_cross_run_redaction(self, cross_run_docx, tmp_path):
+        """Span crossing two runs must fully mask, not leak original chars."""
+        manifest, source_map = self._prepare_docx(tmp_path, cross_run_docx)
+
+        # Find the MONEY candidate (15000元)
+        money_candidates = []
+        for c in manifest["candidates"]:
+            block = next(b for b in manifest["blocks"] if b["id"] == c["blockId"])
+            orig = block["text"][c["start"]:c["end"]]
+            if "15000" in orig:
+                money_candidates.append(c)
+
+        if not money_candidates:
+            pytest.skip("No MONEY candidate found in cross-run DOCX")
+
+        c = money_candidates[0]
+        decisions = [{
+            "id": c["id"], "blockId": c["blockId"],
+            "start": c["start"], "end": c["end"],
+            "action": "redact", "origin": "automatic",
+            "entityType": "MONEY",
+            "sourceLocator": c.get("sourceLocator", {}),
+            "confirmed": True,
+        }]
+
+        rc, stderr, audit, map_data, out_path = self._run_docx_decisions(
+            cross_run_docx, decisions, tmp_path, source_map)
+
+        assert rc == 0, f"Cross-run redact failed: {stderr}"
+        assert audit["residual_scan"]["passed"] is True
+
+        # Verify no original text leaked
+        from docx import Document
+        doc = Document(str(out_path))
+        full_text = "".join(p.text for p in doc.paragraphs)
+        block = next(b for b in manifest["blocks"] if b["id"] == c["blockId"])
+        original = block["text"][c["start"]:c["end"]]
+        assert original not in full_text, f"Cross-run original '{original}' leaked"
+
+    def test_docx_same_para_keep_redact(self, same_para_keep_redact_docx, tmp_path):
+        """Same word in one paragraph: redact first, keep second. Must pass."""
+        manifest, source_map = self._prepare_docx(tmp_path, same_para_keep_redact_docx)
+
+        # Find two 15000元 candidates
+        target = "15000元"
+        matching = []
+        for c in manifest["candidates"]:
+            block = next(b for b in manifest["blocks"] if b["id"] == c["blockId"])
+            if block["text"][c["start"]:c["end"]] == target:
+                matching.append(c)
+
+        if len(matching) < 2:
+            pytest.skip("Need at least 2 '15000元' candidates")
+
+        decisions = [
+            {
+                "id": matching[0]["id"], "blockId": matching[0]["blockId"],
+                "start": matching[0]["start"], "end": matching[0]["end"],
+                "action": "redact", "origin": "automatic",
+                "entityType": "MONEY",
+                "sourceLocator": matching[0].get("sourceLocator", {}),
+                "confirmed": True,
+            },
+            {
+                "id": matching[1]["id"], "blockId": matching[1]["blockId"],
+                "start": matching[1]["start"], "end": matching[1]["end"],
+                "action": "keep", "origin": "automatic",
+                "entityType": "MONEY",
+                "sourceLocator": matching[1].get("sourceLocator", {}),
+                "confirmed": True,
+            },
+        ]
+
+        rc, stderr, audit, map_data, out_path = self._run_docx_decisions(
+            same_para_keep_redact_docx, decisions, tmp_path, source_map)
+
+        assert rc == 0, f"Same-para keep/redact failed: {stderr}"
+        assert audit["residual_scan"]["passed"] is True
+        assert audit["summary"]["redact_applied"] == 1
+
+        # Verify: exported paragraph should have one 15000元 (keep) and one masked
+        from docx import Document
+        doc = Document(str(out_path))
+        para_text = doc.paragraphs[0].text
+        assert "15000元" in para_text, "Kept 15000元 should remain"
+        # The redacted one should be masked (not 15000元 twice)
+        count = para_text.count("15000元")
+        assert count == 1, f"Expected 1 kept '15000元', found {count}"
 
 
 class TestB1MoneyTime:

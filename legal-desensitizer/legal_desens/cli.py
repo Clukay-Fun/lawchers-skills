@@ -241,43 +241,81 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
             key = f"{seg['part']}:{seg['paragraph_index']}"
             seg_index[key] = seg["text"]
 
+        # Group applied decisions by paragraph to handle position shifts
+        from collections import defaultdict
+        para_applied = defaultdict(list)
         for applied in app_result.applied:
-            entity_id = applied.get("entity_id")
-            entity = next((e for e in map_data.get("entities", []) if e["id"] == entity_id), None)
-            if not entity:
-                residual_findings.append({"type": "entity_missing", "decision_id": applied.get("decision_id")})
-                continue
-
             para_idx = applied.get("paragraph")
-            original = entity.get("original", "")
-            replacement = entity.get("replacement", "")
+            if para_idx is not None:
+                para_applied[para_idx].append(applied)
 
-            if para_idx is None:
+        for para_idx, applied_list in para_applied.items():
+            # Get the decision for part name
+            first_decision = next(
+                (d for d in decisions if d.get("id") == applied_list[0].get("decision_id")),
+                None
+            )
+            if not first_decision:
                 continue
-
-            # Find the paragraph in exported segments
-            # We need the part name - get from decision's sourceLocator
-            decision = next((d for d in decisions if d.get("id") == applied.get("decision_id")), None)
-            if not decision:
-                continue
-            locator = decision.get("sourceLocator", {})
-            part = locator.get("part", "word/document.xml")
+            part = first_decision.get("sourceLocator", {}).get("part", "word/document.xml")
             key = f"{part}:{para_idx}"
-
             exported_para = seg_index.get(key, "")
             if not exported_para:
                 continue
 
-            # Check: original should NOT be in this paragraph (it should be replaced)
-            if len(original) >= 2 and original in exported_para:
-                # But if this decision was 'keep', it's OK
-                if decision.get("action") != "keep":
+            # Sort by original_start to track position shifts from replacements
+            applied_list.sort(key=lambda a: a.get("original_start", 0))
+            offset_delta = 0  # cumulative length change from replacements
+
+            for applied in applied_list:
+                entity_id = applied.get("entity_id")
+                entity = next((e for e in map_data.get("entities", []) if e["id"] == entity_id), None)
+                if not entity:
+                    residual_findings.append({"type": "entity_missing", "decision_id": applied.get("decision_id")})
+                    continue
+
+                original = entity.get("original", "")
+                replacement = entity.get("replacement", "")
+
+                # Only check redact decisions (keep decisions should have original at position)
+                decision = next((d for d in decisions if d.get("id") == applied.get("decision_id")), None)
+                if not decision or decision.get("action") != "redact":
+                    # For keep: verify original is still there
+                    check_start = applied.get("original_start", 0) + offset_delta
+                    check_end = check_start + len(original)
+                    if check_end <= len(exported_para):
+                        actual = exported_para[check_start:check_end]
+                        if actual != original:
+                            residual_findings.append({
+                                "type": "keep_text_missing",
+                                "decision_id": applied.get("decision_id"),
+                                "expected": original[:20],
+                                "actual": actual[:20],
+                            })
+                    continue
+
+                # For redact: verify replacement is at the expected position
+                check_start = applied.get("original_start", 0) + offset_delta
+                check_end = check_start + len(replacement)
+                if check_end > len(exported_para):
                     residual_findings.append({
-                        "type": "original_found_in_paragraph",
+                        "type": "position_out_of_bounds",
                         "decision_id": applied.get("decision_id"),
-                        "paragraph": para_idx,
-                        "text_preview": original[:20],
                     })
+                    continue
+
+                actual = exported_para[check_start:check_end]
+                if actual != replacement:
+                    residual_findings.append({
+                        "type": "replacement_mismatch",
+                        "decision_id": applied.get("decision_id"),
+                        "expected": replacement[:20],
+                        "actual": actual[:20],
+                        "position": f"[{check_start}:{check_end}]",
+                    })
+
+                # Update offset delta for subsequent decisions
+                offset_delta += len(replacement) - len(original)
 
     residual_passed = len(residual_findings) == 0
 

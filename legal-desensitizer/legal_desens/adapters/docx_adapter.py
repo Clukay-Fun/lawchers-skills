@@ -129,10 +129,16 @@ def rebuild_paragraph_preserve_format(
 ) -> None:
     """Replace spans in paragraph while preserving per-run formatting.
 
-    Unlike _rebuild_paragraph_with_redactions, this does NOT clear all runs.
-    It walks existing runs, splits them at span boundaries, and only modifies
-    the text content of affected segments. Each segment retains the original
-    run's <w:rPr> (bold, italic, font, color, etc.).
+    Handles cross-run spans correctly: if a span covers part of run N and
+    part of run N+1, both portions are replaced with corresponding mask
+    characters from the single replacement string.
+
+    Strategy:
+    1. For each run, find all spans that intersect it
+    2. Split run text into segments at span boundaries
+    3. Replace span-intersecting segments with mask characters
+    4. Track mask cursor per span across runs (mask written once)
+    5. Insert new runs for additional segments, preserving <w:rPr>
 
     spans: list of {start, end, replacement} sorted by start ascending.
     """
@@ -140,7 +146,9 @@ def rebuild_paragraph_preserve_format(
         return
 
     spans_sorted = sorted(spans, key=lambda s: s["start"])
-    span_idx = 0
+
+    # For each span, track how many mask characters have been consumed
+    mask_cursor = {id(s): 0 for s in spans_sorted}
 
     for meta in run_metas:
         t_elem = meta["text_node"]
@@ -150,44 +158,53 @@ def rebuild_paragraph_preserve_format(
         run_elem = t_elem.getparent()
         run_start = meta["text_start"]
         run_end = meta["text_end"]
-        run_text = t_elem.text
+        run_len = run_end - run_start
 
-        # Find spans that overlap with this run
-        run_spans = []
-        while span_idx < len(spans_sorted):
-            s = spans_sorted[span_idx]
+        # Find spans that intersect this run
+        intersecting = []
+        for s in spans_sorted:
             if s["end"] <= run_start:
-                span_idx += 1
                 continue
             if s["start"] >= run_end:
                 break
-            run_spans.append(s)
-            span_idx += 1
+            intersecting.append(s)
 
-        if not run_spans:
+        if not intersecting:
             continue
 
         # Split this run's text into segments
-        segments = []  # (text, is_replacement)
+        segments = []  # list of (text, span_or_None)
         pos = run_start
-        for s in run_spans:
+        for s in intersecting:
             seg_start = max(s["start"], run_start)
             seg_end = min(s["end"], run_end)
 
             # Text before this span (within this run)
             if seg_start > pos:
-                segments.append((paragraph_text[pos:seg_start], False))
+                segments.append((paragraph_text[pos:seg_start], None))
 
-            # The replacement
-            segments.append((s["replacement"], True))
+            # The span portion within this run
+            span_portion_len = seg_end - seg_start
+            sid = id(s)
+            cursor = mask_cursor[sid]
+            replacement = s["replacement"]
+            # Take span_portion_len characters from the replacement
+            mask_chars = replacement[cursor:cursor + span_portion_len]
+            mask_cursor[sid] = cursor + span_portion_len
+            segments.append((mask_chars, s))
+
             pos = seg_end
 
         # Remaining text after last span (within this run)
         if pos < run_end:
-            segments.append((paragraph_text[pos:run_end], False))
+            segments.append((paragraph_text[pos:run_end], None))
 
-        if len(segments) == 1 and not segments[0][1]:
-            # No replacement in this run
+        if not segments:
+            continue
+
+        # Check if any replacement happened
+        has_replacement = any(s[1] is not None for s in segments)
+        if not has_replacement:
             continue
 
         # Get this run's formatting
@@ -202,19 +219,10 @@ def rebuild_paragraph_preserve_format(
 
         for text, _ in segments[1:]:
             new_run = _make_run_elem(text, rpr)
-            # Detach from temp parent
             if new_run.getparent() is not None:
                 new_run.getparent().remove(new_run)
             parent.insert(insert_pos, new_run)
             insert_pos += 1
-
-        # Update run_metas for subsequent runs (positions shifted)
-        offset_delta = len(segments) - 1
-        for later_meta in run_metas:
-            if later_meta["text_start"] >= run_end:
-                # These runs moved, but we don't update their positions
-                # since we process them in order and they still have correct text
-                pass
 
 
 def _rebuild_paragraph_with_redactions(
