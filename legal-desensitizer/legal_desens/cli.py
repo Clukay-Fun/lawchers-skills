@@ -113,7 +113,10 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
     Bypasses auto-detection (regex/NER). Only positions specified in
     decisions are modified. 'keep' decisions are never touched.
     """
-    from .decisions_apply import apply_decisions_text, apply_decisions_docx, _load_decisions, _load_source_map
+    from .decisions_apply import (
+        apply_decisions_text, apply_decisions_docx, apply_decisions_pdf,
+        _load_decisions, _load_source_map,
+    )
 
     try:
         decisions = _load_decisions(decisions_file)
@@ -159,12 +162,35 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
 
     elif fmt == "irreversible":
         ext = Path(args.input).suffix.lower()
-        print(f"Error: PDF decisions export not yet implemented.\n"
-              f"  Scan PDF requires polygon-based pixel redaction.\n"
-              f"  Text PDF requires per-decision coordinate mapping.\n"
-              f"  Please convert to DOCX or TXT, or split the PDF into text and scan pages.",
-              file=sys.stderr)
-        return 1
+        if ext != ".pdf":
+            print(f"Error: {ext} decisions export not supported", file=sys.stderr)
+            return 1
+
+        # Determine PDF sub-kind from source map
+        doc_kind = source_map.get("document_kind", "")
+        if doc_kind == "pdf-scan":
+            print(
+                "Error: scan PDF decisions export requires polygon-based pixel redaction.\n"
+                "  This is not yet implemented. Use redact-scan for scan PDFs.",
+                file=sys.stderr,
+            )
+            return 1
+        elif doc_kind == "pdf-hybrid":
+            print(
+                "Error: hybrid PDF (mixed text/scan pages) decisions export is not yet supported.\n"
+                "  Split the PDF into text-only and scan-only parts, or convert to DOCX.",
+                file=sys.stderr,
+            )
+            return 1
+        elif doc_kind == "pdf-text":
+            try:
+                map_data, app_result = apply_decisions_pdf(args.input, args.out, decisions, blocks)
+            except Exception as e:
+                print(f"Error applying decisions to PDF: {e}", file=sys.stderr)
+                return 1
+        else:
+            print(f"Error: unknown PDF kind '{doc_kind}' in source map", file=sys.stderr)
+            return 1
     else:
         print(f"Error: format {fmt} not supported for decisions export", file=sys.stderr)
         return 1
@@ -182,31 +208,18 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
         with open(args.map, "w", encoding="utf-8") as f:
             json.dump(map_data, f, ensure_ascii=False, indent=2)
 
-    # P0: Real residual verification using applied positions
-    residual_findings = []
+    # Verify four-way invariant: requested == applied == entities == occurrences
     redact_decisions = [d for d in decisions if d.get("action") == "redact"]
+    residual_findings = []
 
-    # 1. Verify requested == applied == entities
     if len(app_result.applied) != len(redact_decisions):
-        residual_findings.append({
-            "type": "count_mismatch",
-            "requested": len(redact_decisions),
-            "applied": len(app_result.applied),
-        })
+        residual_findings.append({"type": "count_mismatch", "requested": len(redact_decisions), "applied": len(app_result.applied)})
     if len(map_data.get("entities", [])) != len(app_result.applied):
-        residual_findings.append({
-            "type": "entity_count_mismatch",
-            "entities": len(map_data.get("entities", [])),
-            "applied": len(app_result.applied),
-        })
+        residual_findings.append({"type": "entity_count_mismatch", "entities": len(map_data.get("entities", [])), "applied": len(app_result.applied)})
     if len(map_data.get("occurrences", [])) != len(app_result.applied):
-        residual_findings.append({
-            "type": "occurrence_count_mismatch",
-            "occurrences": len(map_data.get("occurrences", [])),
-            "applied": len(app_result.applied),
-        })
+        residual_findings.append({"type": "occurrence_count_mismatch", "occurrences": len(map_data.get("occurrences", [])), "applied": len(app_result.applied)})
 
-    # 2. Verify each applied decision's position in the output
+    # Position-based residual verification for text/docx
     if fmt in ("txt", "md") and not residual_findings:
         from .io import read_text
         exported_text = read_text(args.out).text
@@ -221,88 +234,54 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
             replacement = entity.get("replacement", "")
             actual = exported_text[red_start:red_end]
             if actual != replacement:
-                residual_findings.append({
-                    "type": "replacement_mismatch",
-                    "decision_id": applied.get("decision_id"),
-                    "expected": replacement[:20],
-                    "actual": actual[:20],
-                    "position": f"[{red_start}:{red_end}]",
-                })
+                residual_findings.append({"type": "replacement_mismatch", "decision_id": applied.get("decision_id"), "expected": replacement[:20], "actual": actual[:20], "position": f"[{red_start}:{red_end}]"})
 
     elif fmt == "docx" and not residual_findings:
-        # Verify by checking each applied decision's paragraph position
         from .adapters.docx_adapter import DOCXAdapter
         adapter = DOCXAdapter()
         exported_text, exported_segments = adapter.extract_text(args.out)
-
-        # Build segment index: "part:para_idx" → segment text
         seg_index = {}
         for seg in exported_segments:
             key = f"{seg['part']}:{seg['paragraph_index']}"
             seg_index[key] = seg["text"]
 
-        # Group by OOXML part and paragraph. Paragraph indexes restart in
-        # every part (document, headers, footers, comments, etc.).
         from collections import defaultdict
         para_applied = defaultdict(list)
         for applied in app_result.applied:
             part = applied.get("part")
             para_idx = applied.get("paragraph")
             if not part or para_idx is None:
-                residual_findings.append({
-                    "type": "source_locator_missing",
-                    "decision_id": applied.get("decision_id"),
-                })
+                residual_findings.append({"type": "source_locator_missing", "decision_id": applied.get("decision_id")})
                 continue
             para_applied[(part, para_idx)].append(applied)
 
         for (part, para_idx), applied_list in para_applied.items():
             key = f"{part}:{para_idx}"
             if key not in seg_index:
-                residual_findings.append({
-                    "type": "exported_paragraph_missing",
-                    "part": part,
-                    "paragraph": para_idx,
-                })
+                residual_findings.append({"type": "exported_paragraph_missing", "part": part, "paragraph": para_idx})
                 continue
             exported_para = seg_index[key]
-
-            # Sort by original_start to track position shifts from replacements
             applied_list.sort(key=lambda a: a.get("original_start", 0))
-            offset_delta = 0  # cumulative length change from replacements
-
+            offset_delta = 0
             for applied in applied_list:
                 entity_id = applied.get("entity_id")
                 entity = next((e for e in map_data.get("entities", []) if e["id"] == entity_id), None)
                 if not entity:
                     residual_findings.append({"type": "entity_missing", "decision_id": applied.get("decision_id")})
                     continue
-
                 original = entity.get("original", "")
                 replacement = entity.get("replacement", "")
-
-                # For redact: verify replacement is at the expected position
                 check_start = applied.get("original_start", 0) + offset_delta
                 check_end = check_start + len(replacement)
                 if check_end > len(exported_para):
-                    residual_findings.append({
-                        "type": "position_out_of_bounds",
-                        "decision_id": applied.get("decision_id"),
-                    })
+                    residual_findings.append({"type": "position_out_of_bounds", "decision_id": applied.get("decision_id")})
                     continue
-
                 actual = exported_para[check_start:check_end]
                 if actual != replacement:
-                    residual_findings.append({
-                        "type": "replacement_mismatch",
-                        "decision_id": applied.get("decision_id"),
-                        "expected": replacement[:20],
-                        "actual": actual[:20],
-                        "position": f"[{check_start}:{check_end}]",
-                    })
-
-                # Update offset delta for subsequent decisions
+                    residual_findings.append({"type": "replacement_mismatch", "decision_id": applied.get("decision_id"), "expected": replacement[:20], "actual": actual[:20], "position": f"[{check_start}:{check_end}]"})
                 offset_delta += len(replacement) - len(original)
+
+    # PDF residual is verified inside apply_decisions_pdf via rect-based extraction
 
     residual_passed = len(residual_findings) == 0
 
@@ -335,110 +314,6 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
 
     print(f"Decisions export complete: {app_result.redact_applied}/{app_result.redact_requested} applied, mode={fmt}", file=sys.stderr)
     return 0
-
-
-def _apply_decisions_pdf(pdf_path: str, output_path: str, decisions: List[dict], blocks: List[dict]) -> dict:
-    """Apply decisions to a text-layer PDF using fitz."""
-    try:
-        import fitz
-    except ImportError:
-        raise ImportError("PyMuPDF required for PDF decisions export: pip install legal-desens[pdf]")
-
-    # Group decisions by page
-    blocks_by_id = {b["id"]: b for b in blocks}
-    page_decisions: Dict[int, List[dict]] = {}
-
-    for d in decisions:
-        if d.get("action") != "redact":
-            continue
-        locator = d.get("sourceLocator", {})
-        page_num = locator.get("page")
-        if page_num is None:
-            # Try to find page from block
-            block = blocks_by_id.get(d.get("blockId"))
-            if block:
-                page_num = block.get("sourceLocator", {}).get("page")
-        if page_num is not None:
-            page_decisions.setdefault(page_num, []).append(d)
-
-    doc = fitz.open(pdf_path)
-    entities = []
-    occurrences = []
-
-    for page_number, page_dcs in page_decisions.items():
-        if page_number < 1 or page_number > len(doc):
-            continue
-        page = doc[page_number - 1]
-        page_text = page.get_text()
-        if not page_text.strip():
-            continue
-
-        for d in page_dcs:
-            block = blocks_by_id.get(d.get("blockId"))
-            if not block:
-                continue
-
-            original = block["text"][d["start"]:d["end"]]
-            if not original:
-                continue
-
-            # Search for the text on this page
-            rects = page.search_for(original)
-            for rect in rects:
-                page.add_redact_annot(rect, fill=(1, 1, 1))
-
-            entity_type = d.get("entityType", "")
-            replacement = _mask_value(original, entity_type)
-
-            entity_id = f"decision_{d.get('id', len(entities))}"
-            entities.append({
-                "id": entity_id,
-                "entity_type": entity_type or "MANUAL",
-                "original": original,
-                "replacement": replacement,
-                "engines": ["decision"],
-            })
-
-            for rect in rects:
-                occurrences.append({
-                    "entity_id": entity_id,
-                    "engine": "decision",
-                    "page": page_number,
-                    "rectangles": [list(rect)],
-                })
-
-        if page_dcs:
-            page.apply_redactions()
-            # Insert replacement text
-            for d in page_dcs:
-                block = blocks_by_id.get(d.get("blockId"))
-                if not block:
-                    continue
-                original = block["text"][d["start"]:d["end"]]
-                entity_type = d.get("entityType", "")
-                replacement = _mask_value(original, entity_type)
-                rects = page.search_for(original)
-                for rect in rects:
-                    page.insert_text(
-                        (rect.x0, rect.y1 - 2),
-                        replacement,
-                        fontname="china-s",
-                        fontsize=max(4, min(10, rect.height * 0.75)),
-                        color=(0, 0, 0),
-                    )
-
-    doc.save(output_path, garbage=4, clean=True, deflate=True)
-    doc.close()
-
-    source_sha = hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest()
-    return {
-        "schema_version": "1.0",
-        "source_file": Path(pdf_path).name,
-        "redacted_file": Path(output_path).name,
-        "source_sha256": source_sha,
-        "entities": entities,
-        "occurrences": occurrences,
-    }
 
 
 def _cmd_redact(args: argparse.Namespace) -> int:

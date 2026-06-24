@@ -102,6 +102,10 @@ def _prepare_text_pdf(
     Handles hybrid PDFs: pages with text layer use text extraction,
     pages without text layer fall through to OCR.
 
+    For text pages, also extracts a charMap: one entry per character in
+    block.text, each containing {page, rect: [x0,y0,x1,y1]}. Any
+    character missing a coordinate causes a fail-closed error.
+
     Returns (blocks, full_text, document_kind).
     """
     try:
@@ -125,25 +129,80 @@ def _prepare_text_pdf(
 
     try:
         ocr_engine = None
-        # Keep blocks in source-page order. Text pages use extraction; image-only
-        # pages are rendered and OCR'd in place.
         for page_number, page in enumerate(doc, start=1):
             page_text = page.get_text().strip()
             if page_text:
                 has_text_pages = True
+                # Extract character-level coordinates using dict
+                # (rawdict returns empty text for some CJK fonts; dict is more reliable)
+                raw = page.get_text("dict")
+                # Build a flat list of (char, rect) from all spans in all blocks/lines
+                char_entries = []  # list of {"char": str, "rect": [x0,y0,x1,y1]}
+                for block in raw.get("blocks", []):
+                    if block.get("type") != 0:  # 0 = text block
+                        continue
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            span_text = span.get("text", "")
+                            span_bbox = span.get("bbox")  # [x0,y0,x1,y1]
+                            if not span_text or not span_bbox:
+                                continue
+                            # Distribute bbox proportionally across characters
+                            x0, y0, x1, y1 = span_bbox
+                            char_width = (x1 - x0) / max(len(span_text), 1)
+                            for i, ch in enumerate(span_text):
+                                cx0 = x0 + i * char_width
+                                cx1 = cx0 + char_width
+                                char_entries.append({
+                                    "char": ch,
+                                    "rect": [cx0, y0, cx1, y1],
+                                    "page": page_number,
+                                })
+
+                # Build block text by joining all char entries' text
+                block_text = "".join(e["char"] for e in char_entries).strip()
+                if not block_text:
+                    continue
+
+                # Validate: every character in block_text must have a coordinate
+                # We rebuild charMap by matching characters from char_entries to block_text
+                # Since strip() may remove leading/trailing whitespace, we need to
+                # find the matching subsequence in char_entries
+                block_chars = list(block_text)
+                char_map = []
+                ci = 0  # index into char_entries
+                for bc in block_chars:
+                    # Skip whitespace in char_entries to find matching char
+                    while ci < len(char_entries) and char_entries[ci]["char"] != bc:
+                        ci += 1
+                    if ci < len(char_entries):
+                        char_map.append({
+                            "page": char_entries[ci]["page"],
+                            "rect": char_entries[ci]["rect"],
+                        })
+                        ci += 1
+                    else:
+                        # Character not found in extracted entries — fail closed
+                        raise ValueError(
+                            f"PDF char coordinate mapping failed: char '{bc}' at "
+                            f"offset {offset + len(char_map)} on page {page_number} "
+                            f"has no bounding box"
+                        )
+
                 block_id = _gen_id("blk")
                 blocks.append({
                     "id": block_id,
                     "kind": "paragraph",
-                    "text": page_text,
+                    "text": block_text,
                     "char_offset": offset,
+                    "charMap": char_map,
                     "sourceLocator": {
                         "type": "pdf-text",
                         "page": page_number,
                     },
                 })
-                full_parts.append(page_text)
-                offset += len(page_text) + 1
+                full_parts.append(block_text)
+                offset += len(block_text) + 1
             else:
                 has_ocr_pages = True
                 from .engine.ocr import run_rapidocr, get_rapidocr_instance
@@ -482,6 +541,7 @@ def prepare(
                 "char_offset": blk["char_offset"],
                 "text": blk["text"],
                 "text_length": len(blk["text"]),
+                **({"charMap": blk["charMap"]} if "charMap" in blk else {}),
             }
             for blk in blocks
         ],
