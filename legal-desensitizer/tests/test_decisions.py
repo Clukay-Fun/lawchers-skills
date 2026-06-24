@@ -11,12 +11,65 @@ from pathlib import Path
 import pytest
 
 
+def _make_docx(tmp_path, name, paragraphs):
+    """Create a simple DOCX with given paragraphs.
+
+    paragraphs: list of (text, bold_ranges) where bold_ranges is list of (start, end).
+    Returns path to the DOCX file.
+    """
+    try:
+        from docx import Document
+        from docx.shared import Pt
+    except ImportError:
+        pytest.skip("python-docx not installed")
+
+    doc = Document()
+    for text, bold_ranges in paragraphs:
+        p = doc.add_paragraph()
+        # Build runs with mixed formatting
+        if bold_ranges:
+            # Sort bold ranges
+            sorted_ranges = sorted(bold_ranges, key=lambda r: r[0])
+            pos = 0
+            for bs, be in sorted_ranges:
+                if bs > pos:
+                    run = p.add_run(text[pos:bs])
+                run = p.add_run(text[bs:be])
+                run.bold = True
+                pos = be
+            if pos < len(text):
+                p.add_run(text[pos:])
+        else:
+            p.add_run(text)
+
+    p = tmp_path / name
+    doc.save(str(p))
+    return p
+
+
 @pytest.fixture
 def sample_text_file(tmp_path):
     text = "张三于2026年6月20日入职，月工资15000元。\n联系电话：13800138000。\n身份证号：110105199003071234。\n北京图强科技有限公司支付补偿金50000元。\n"
     p = tmp_path / "sample.txt"
     p.write_text(text, encoding="utf-8")
     return p
+
+
+@pytest.fixture
+def sample_docx_file(tmp_path):
+    """DOCX with two paragraphs mentioning the same MONEY amount."""
+    return _make_docx(tmp_path, "sample.docx", [
+        ("赔偿金15000元需在2026年6月20日前支付。", []),
+        ("月薪15000元另计。", []),
+    ])
+
+
+@pytest.fixture
+def formatted_docx_file(tmp_path):
+    """DOCX with mixed bold/normal formatting."""
+    return _make_docx(tmp_path, "formatted.docx", [
+        ("张三于2026年6月20日入职，月工资15000元。", [(0, 2)]),  # 张三 bold
+    ])
 
 
 @pytest.fixture
@@ -271,6 +324,135 @@ class TestDecisionsFailClosed:
 
         rc, _, stderr, _, _, _ = _run_decisions(src, dp, smp, tmp_path)
         assert rc != 0, "Invalid range should cause non-zero exit"
+
+
+class TestDecisionsDOCX:
+    """Test --decisions with DOCX files."""
+
+    def _prepare_docx(self, tmp_path, docx_path):
+        manifest_path = tmp_path / "manifest.json"
+        preview_path = tmp_path / "preview.md"
+        source_map_path = tmp_path / "source-map.json"
+        result = subprocess.run(
+            ["python3", "-m", "legal_desens.cli", "prepare",
+             str(docx_path), "--level", "strict", "--regex-only",
+             "--preview-md", str(preview_path),
+             "--manifest", str(manifest_path),
+             "--map", str(source_map_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, f"prepare failed: {result.stderr}"
+        manifest = json.loads(manifest_path.read_text())
+        source_map = json.loads(source_map_path.read_text())
+        return manifest, source_map
+
+    def _run_docx_decisions(self, src, decisions, tmp_path, source_map):
+        smp = tmp_path / "source-map.json"
+        smp.write_text(json.dumps(source_map))
+        dp = tmp_path / "decisions.json"
+        dp.write_text(json.dumps(decisions, ensure_ascii=False))
+        out_path = tmp_path / "output.docx"
+        map_path = tmp_path / "map.json"
+        audit_path = tmp_path / "audit.json"
+
+        proc = subprocess.run(
+            ["python3", "-m", "legal_desens.cli", "redact", str(src),
+             "--level", "strict",
+             "--decisions", str(dp),
+             "--source-map", str(smp),
+             "--out", str(out_path),
+             "--map", str(map_path),
+             "--audit", str(audit_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+        audit = json.loads(audit_path.read_text()) if audit_path.exists() else None
+        map_data = json.loads(map_path.read_text()) if map_path.exists() else None
+        return proc.returncode, proc.stderr, audit, map_data, out_path
+
+    def test_docx_redact_applied(self, sample_docx_file, tmp_path):
+        """DOCX redact decisions must mask text in output."""
+        manifest, source_map = self._prepare_docx(tmp_path, sample_docx_file)
+        decisions = _make_decisions(manifest)
+
+        rc, stderr, audit, map_data, out_path = self._run_docx_decisions(
+            sample_docx_file, decisions, tmp_path, source_map)
+
+        assert rc == 0, f"export failed: {stderr}"
+        assert audit["residual_scan"]["passed"] is True
+        redact_count = sum(1 for d in decisions if d["action"] == "redact")
+        assert audit["summary"]["redact_requested"] == redact_count
+        assert audit["summary"]["redact_applied"] == redact_count
+        assert audit["summary"]["total_entities"] == redact_count
+        assert audit["summary"]["total_occurrences"] == redact_count
+
+    def test_docx_same_word_keep_redact(self, sample_docx_file, tmp_path):
+        """Same word in two paragraphs: one redact, one keep. Must not false-positive."""
+        manifest, source_map = self._prepare_docx(tmp_path, sample_docx_file)
+
+        # Find all 15000元 candidates (same text in different paragraphs)
+        target_text = "15000元"
+        matching_candidates = []
+        for c in manifest["candidates"]:
+            block = next(b for b in manifest["blocks"] if b["id"] == c["blockId"])
+            if block["text"][c["start"]:c["end"]] == target_text:
+                matching_candidates.append(c)
+
+        if len(matching_candidates) < 2:
+            pytest.skip("Need at least 2 matching candidates in different paragraphs")
+
+        decisions = []
+        # First occurrence → redact
+        decisions.append({
+            "id": matching_candidates[0]["id"],
+            "blockId": matching_candidates[0]["blockId"],
+            "start": matching_candidates[0]["start"],
+            "end": matching_candidates[0]["end"],
+            "action": "redact", "origin": "automatic",
+            "entityType": "MONEY",
+            "sourceLocator": matching_candidates[0].get("sourceLocator", {}),
+            "confirmed": True,
+        })
+        # Second occurrence → keep
+        decisions.append({
+            "id": matching_candidates[1]["id"],
+            "blockId": matching_candidates[1]["blockId"],
+            "start": matching_candidates[1]["start"],
+            "end": matching_candidates[1]["end"],
+            "action": "keep", "origin": "automatic",
+            "entityType": "MONEY",
+            "sourceLocator": matching_candidates[1].get("sourceLocator", {}),
+            "confirmed": True,
+        })
+
+        rc, stderr, audit, map_data, out_path = self._run_docx_decisions(
+            sample_docx_file, decisions, tmp_path, source_map)
+
+        assert rc == 0, f"Same-word keep/redact should pass: {stderr}"
+        assert audit["residual_scan"]["passed"] is True
+        assert audit["summary"]["redact_applied"] == 1  # Only 1 redact decision
+
+    def test_docx_format_preservation(self, formatted_docx_file, tmp_path):
+        """Bold formatting must survive redaction."""
+        manifest, source_map = self._prepare_docx(tmp_path, formatted_docx_file)
+        decisions = _make_decisions(manifest)
+
+        rc, stderr, audit, _, out_path = self._run_docx_decisions(
+            formatted_docx_file, decisions, tmp_path, source_map)
+        assert rc == 0, f"export failed: {stderr}"
+
+        # Check that the output DOCX has bold runs
+        try:
+            from docx import Document
+            doc = Document(str(out_path))
+            has_bold = False
+            for p in doc.paragraphs:
+                for run in p.runs:
+                    if run.bold:
+                        has_bold = True
+            assert has_bold, "Bold formatting should be preserved in output"
+        except ImportError:
+            pytest.skip("python-docx not installed")
 
 
 class TestB1MoneyTime:

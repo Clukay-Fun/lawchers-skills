@@ -121,6 +121,102 @@ def _label_prefix_for(entity_type: str, rules) -> str:
     }.get(entity_type, entity_type)
 
 
+def rebuild_paragraph_preserve_format(
+    paragraph_elem,
+    paragraph_text: str,
+    run_metas: List[dict],
+    spans: List[dict],
+) -> None:
+    """Replace spans in paragraph while preserving per-run formatting.
+
+    Unlike _rebuild_paragraph_with_redactions, this does NOT clear all runs.
+    It walks existing runs, splits them at span boundaries, and only modifies
+    the text content of affected segments. Each segment retains the original
+    run's <w:rPr> (bold, italic, font, color, etc.).
+
+    spans: list of {start, end, replacement} sorted by start ascending.
+    """
+    if not spans:
+        return
+
+    spans_sorted = sorted(spans, key=lambda s: s["start"])
+    span_idx = 0
+
+    for meta in run_metas:
+        t_elem = meta["text_node"]
+        if t_elem is None or t_elem.text is None:
+            continue
+
+        run_elem = t_elem.getparent()
+        run_start = meta["text_start"]
+        run_end = meta["text_end"]
+        run_text = t_elem.text
+
+        # Find spans that overlap with this run
+        run_spans = []
+        while span_idx < len(spans_sorted):
+            s = spans_sorted[span_idx]
+            if s["end"] <= run_start:
+                span_idx += 1
+                continue
+            if s["start"] >= run_end:
+                break
+            run_spans.append(s)
+            span_idx += 1
+
+        if not run_spans:
+            continue
+
+        # Split this run's text into segments
+        segments = []  # (text, is_replacement)
+        pos = run_start
+        for s in run_spans:
+            seg_start = max(s["start"], run_start)
+            seg_end = min(s["end"], run_end)
+
+            # Text before this span (within this run)
+            if seg_start > pos:
+                segments.append((paragraph_text[pos:seg_start], False))
+
+            # The replacement
+            segments.append((s["replacement"], True))
+            pos = seg_end
+
+        # Remaining text after last span (within this run)
+        if pos < run_end:
+            segments.append((paragraph_text[pos:run_end], False))
+
+        if len(segments) == 1 and not segments[0][1]:
+            # No replacement in this run
+            continue
+
+        # Get this run's formatting
+        rpr = _get_run_style_props(run_elem)
+
+        # Replace the current run's text with the first segment
+        t_elem.text = segments[0][0]
+
+        # Insert additional runs after the current run for remaining segments
+        parent = run_elem.getparent()
+        insert_pos = list(parent).index(run_elem) + 1
+
+        for text, _ in segments[1:]:
+            new_run = _make_run_elem(text, rpr)
+            # Detach from temp parent
+            if new_run.getparent() is not None:
+                new_run.getparent().remove(new_run)
+            parent.insert(insert_pos, new_run)
+            insert_pos += 1
+
+        # Update run_metas for subsequent runs (positions shifted)
+        offset_delta = len(segments) - 1
+        for later_meta in run_metas:
+            if later_meta["text_start"] >= run_end:
+                # These runs moved, but we don't update their positions
+                # since we process them in order and they still have correct text
+                pass
+
+
 def _rebuild_paragraph_with_redactions(
     paragraph_elem,
     paragraph_text: str,

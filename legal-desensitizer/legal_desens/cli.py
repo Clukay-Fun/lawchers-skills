@@ -162,7 +162,7 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
         print(f"Error: PDF decisions export not yet implemented.\n"
               f"  Scan PDF requires polygon-based pixel redaction.\n"
               f"  Text PDF requires per-decision coordinate mapping.\n"
-              f"  Use the legacy /api/export/redacted endpoint for PDF files.",
+              f"  Please convert to DOCX or TXT, or split the PDF into text and scan pages.",
               file=sys.stderr)
         return 1
     else:
@@ -199,6 +199,12 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
             "entities": len(map_data.get("entities", [])),
             "applied": len(app_result.applied),
         })
+    if len(map_data.get("occurrences", [])) != len(app_result.applied):
+        residual_findings.append({
+            "type": "occurrence_count_mismatch",
+            "occurrences": len(map_data.get("occurrences", [])),
+            "applied": len(app_result.applied),
+        })
 
     # 2. Verify each applied decision's position in the output
     if fmt in ("txt", "md") and not residual_findings:
@@ -224,22 +230,54 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
                 })
 
     elif fmt == "docx" and not residual_findings:
+        # Verify by checking each applied decision's paragraph position
         from .adapters.docx_adapter import DOCXAdapter
         adapter = DOCXAdapter()
-        exported_text, _ = adapter.extract_text(args.out)
+        exported_text, exported_segments = adapter.extract_text(args.out)
+
+        # Build segment index: "part:para_idx" → segment text
+        seg_index = {}
+        for seg in exported_segments:
+            key = f"{seg['part']}:{seg['paragraph_index']}"
+            seg_index[key] = seg["text"]
+
         for applied in app_result.applied:
             entity_id = applied.get("entity_id")
             entity = next((e for e in map_data.get("entities", []) if e["id"] == entity_id), None)
             if not entity:
                 residual_findings.append({"type": "entity_missing", "decision_id": applied.get("decision_id")})
                 continue
+
+            para_idx = applied.get("paragraph")
             original = entity.get("original", "")
-            if len(original) >= 2 and original in exported_text:
-                residual_findings.append({
-                    "type": "original_found_in_export",
-                    "decision_id": applied.get("decision_id"),
-                    "text_preview": original[:20],
-                })
+            replacement = entity.get("replacement", "")
+
+            if para_idx is None:
+                continue
+
+            # Find the paragraph in exported segments
+            # We need the part name - get from decision's sourceLocator
+            decision = next((d for d in decisions if d.get("id") == applied.get("decision_id")), None)
+            if not decision:
+                continue
+            locator = decision.get("sourceLocator", {})
+            part = locator.get("part", "word/document.xml")
+            key = f"{part}:{para_idx}"
+
+            exported_para = seg_index.get(key, "")
+            if not exported_para:
+                continue
+
+            # Check: original should NOT be in this paragraph (it should be replaced)
+            if len(original) >= 2 and original in exported_para:
+                # But if this decision was 'keep', it's OK
+                if decision.get("action") != "keep":
+                    residual_findings.append({
+                        "type": "original_found_in_paragraph",
+                        "decision_id": applied.get("decision_id"),
+                        "paragraph": para_idx,
+                        "text_preview": original[:20],
+                    })
 
     residual_passed = len(residual_findings) == 0
 

@@ -242,7 +242,7 @@ def apply_decisions_docx(
     """
     from .adapters.docx_adapter import (
         _is_text_part, _paragraphs,
-        _extract_paragraph_runs_text, _rebuild_paragraph_with_redactions,
+        _extract_paragraph_runs_text, rebuild_paragraph_preserve_format,
     )
     from lxml import etree
     import zipfile
@@ -371,7 +371,7 @@ def apply_decisions_docx(
                 })
 
             if spans_for_para:
-                _rebuild_paragraph_with_redactions(
+                rebuild_paragraph_preserve_format(
                     child, para_text, run_metas, spans_for_para,
                 )
 
