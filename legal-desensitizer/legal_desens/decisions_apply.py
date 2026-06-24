@@ -262,7 +262,26 @@ def apply_decisions_docx(
             result.failed.append({"decision_id": d.get("id"), "reason": f"block '{block_id}' not found"})
             continue
 
-        locator = d.get("sourceLocator") or block.get("sourceLocator", {})
+        # The source map is authoritative. A client-supplied locator may be
+        # echoed for traceability, but must never redirect a decision to a
+        # different OOXML part or paragraph.
+        locator = block.get("sourceLocator", {})
+        decision_locator = d.get("sourceLocator") or {}
+        if decision_locator:
+            locator_identity = (
+                locator.get("part", "word/document.xml"),
+                locator.get("paragraph_index"),
+            )
+            decision_identity = (
+                decision_locator.get("part", "word/document.xml"),
+                decision_locator.get("paragraph_index"),
+            )
+            if decision_identity != locator_identity:
+                result.failed.append({
+                    "decision_id": d.get("id"),
+                    "reason": "decision sourceLocator does not match source map",
+                })
+                continue
         part = locator.get("part", "word/document.xml")
         para_idx = locator.get("paragraph_index")
         if para_idx is None:
@@ -335,7 +354,17 @@ def apply_decisions_docx(
             for d, block in decisions_for_para:
                 local_start = d.get("start", 0)
                 local_end = d.get("end", 0)
+                expected_original = block.get("text", "")[local_start:local_end]
                 original = para_text[local_start:local_end]
+                if original != expected_original:
+                    result.failed.append({
+                        "decision_id": d.get("id"),
+                        "reason": (
+                            f"source locator mismatch in {part_name} paragraph "
+                            f"{para_idx} at [{local_start}:{local_end}]"
+                        ),
+                    })
+                    continue
                 entity_type = d.get("entityType", "")
                 replacement = _mask_value(original, entity_type)
 
@@ -358,6 +387,7 @@ def apply_decisions_docx(
                 result.applied.append({
                     "decision_id": d.get("id"),
                     "entity_id": entity_id,
+                    "part": part_name,
                     "paragraph": para_idx,
                     "original_start": local_start,
                     "original_end": local_end,

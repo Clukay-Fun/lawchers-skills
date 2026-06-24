@@ -147,10 +147,47 @@ def rebuild_paragraph_preserve_format(
 
     spans_sorted = sorted(spans, key=lambda s: s["start"])
 
-    # For each span, track how many mask characters have been consumed
-    mask_cursor = {id(s): 0 for s in spans_sorted}
+    # Distribute every replacement across the source runs it covers.  The
+    # allocation is proportional to the amount of source text in each run,
+    # so the complete replacement is emitted even when its length differs
+    # from the original span, while retaining the covered runs' formatting.
+    span_chunks = {}
+    for span in spans_sorted:
+        overlaps = []
+        for run_index, meta in enumerate(run_metas):
+            overlap_start = max(span["start"], meta["text_start"])
+            overlap_end = min(span["end"], meta["text_end"])
+            if overlap_start < overlap_end:
+                overlaps.append((run_index, overlap_end - overlap_start))
 
-    for meta in run_metas:
+        source_length = sum(length for _, length in overlaps)
+        replacement = span["replacement"]
+        if source_length <= 0:
+            continue
+
+        allocations = [
+            len(replacement) * length // source_length
+            for _, length in overlaps
+        ]
+        remaining = len(replacement) - sum(allocations)
+        remainder_order = sorted(
+            range(len(overlaps)),
+            key=lambda index: (
+                -(len(replacement) * overlaps[index][1] % source_length),
+                index,
+            ),
+        )
+        for index in remainder_order[:remaining]:
+            allocations[index] += 1
+
+        cursor = 0
+        for (run_index, _), allocation in zip(overlaps, allocations):
+            span_chunks[(id(span), run_index)] = replacement[
+                cursor:cursor + allocation
+            ]
+            cursor += allocation
+
+    for run_index, meta in enumerate(run_metas):
         t_elem = meta["text_node"]
         if t_elem is None or t_elem.text is None:
             continue
@@ -183,15 +220,10 @@ def rebuild_paragraph_preserve_format(
             if seg_start > pos:
                 segments.append((paragraph_text[pos:seg_start], None))
 
-            # The span portion within this run
-            span_portion_len = seg_end - seg_start
-            sid = id(s)
-            cursor = mask_cursor[sid]
-            replacement = s["replacement"]
-            # Take span_portion_len characters from the replacement
-            mask_chars = replacement[cursor:cursor + span_portion_len]
-            mask_cursor[sid] = cursor + span_portion_len
-            segments.append((mask_chars, s))
+            # Remove this source portion and insert the replacement chunk
+            # allocated to this run.  Chunks across all covered runs always
+            # concatenate to the complete replacement string.
+            segments.append((span_chunks.get((id(s), run_index), ""), s))
 
             pos = seg_end
 

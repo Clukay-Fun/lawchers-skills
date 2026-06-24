@@ -104,6 +104,32 @@ def same_para_keep_redact_docx(tmp_path):
 
 
 @pytest.fixture
+def cross_run_longer_mask_docx(tmp_path):
+    """DOCX where a manual two-character span expands to a four-char mask."""
+    return _make_docx(tmp_path, "cross_run_longer.docx", [
+        {"text": "前甲乙后", "runs": [
+            ("前", False), ("甲", True), ("乙后", False),
+        ]},
+    ])
+
+
+@pytest.fixture
+def body_and_header_docx(tmp_path):
+    """DOCX with paragraph index 0 in both document and header parts."""
+    try:
+        from docx import Document
+    except ImportError:
+        pytest.skip("python-docx not installed")
+
+    doc = Document()
+    doc.add_paragraph("正文金额15000元。")
+    doc.sections[0].header.paragraphs[0].text = "页眉补偿50000元。"
+    path = tmp_path / "body_and_header.docx"
+    doc.save(str(path))
+    return path
+
+
+@pytest.fixture
 def prepared_files(tmp_path, sample_text_file):
     manifest_path = tmp_path / "manifest.json"
     preview_path = tmp_path / "preview.md"
@@ -518,6 +544,10 @@ class TestDecisionsDOCX:
         block = next(b for b in manifest["blocks"] if b["id"] == c["blockId"])
         original = block["text"][c["start"]:c["end"]]
         assert original not in full_text, f"Cross-run original '{original}' leaked"
+        mask_runs = [run for run in doc.paragraphs[0].runs if "*" in run.text]
+        unit_runs = [run for run in doc.paragraphs[0].runs if "元" in run.text]
+        assert mask_runs and all(run.bold for run in mask_runs)
+        assert unit_runs and all(run.bold is not True for run in unit_runs)
 
     def test_docx_same_para_keep_redact(self, same_para_keep_redact_docx, tmp_path):
         """Same word in one paragraph: redact first, keep second. Must pass."""
@@ -568,6 +598,102 @@ class TestDecisionsDOCX:
         # The redacted one should be masked (not 15000元 twice)
         count = para_text.count("15000元")
         assert count == 1, f"Expected 1 kept '15000元', found {count}"
+
+    def test_docx_cross_run_longer_replacement(
+        self, cross_run_longer_mask_docx, tmp_path
+    ):
+        """A replacement longer than its source span must be emitted completely."""
+        manifest, source_map = self._prepare_docx(
+            tmp_path, cross_run_longer_mask_docx
+        )
+        block = manifest["blocks"][0]
+        start = block["text"].index("甲乙")
+        decisions = [{
+            "id": "manual-cross-run-longer",
+            "blockId": block["id"],
+            "start": start,
+            "end": start + 2,
+            "action": "redact",
+            "origin": "manual",
+            "entityType": "MANUAL",
+            "sourceLocator": block["sourceLocator"],
+            "confirmed": True,
+        }]
+
+        rc, stderr, audit, _, out_path = self._run_docx_decisions(
+            cross_run_longer_mask_docx, decisions, tmp_path, source_map
+        )
+
+        assert rc == 0, f"Longer cross-run mask failed: {stderr}"
+        assert audit["residual_scan"]["passed"] is True
+        from docx import Document
+        doc = Document(str(out_path))
+        assert doc.paragraphs[0].text == "前甲***后"
+        assert doc.paragraphs[0].runs[-1].text.endswith("后")
+        assert doc.paragraphs[0].runs[-1].bold is not True
+
+    def test_docx_verification_separates_ooxml_parts(
+        self, body_and_header_docx, tmp_path
+    ):
+        """Body/header paragraph 0 decisions must be verified independently."""
+        manifest, source_map = self._prepare_docx(tmp_path, body_and_header_docx)
+        blocks = {b["id"]: b for b in manifest["blocks"]}
+        decisions = []
+        for candidate in manifest["candidates"]:
+            block = blocks[candidate["blockId"]]
+            original = block["text"][candidate["start"]:candidate["end"]]
+            if original not in {"15000元", "50000元"}:
+                continue
+            decisions.append({
+                "id": candidate["id"],
+                "blockId": candidate["blockId"],
+                "start": candidate["start"],
+                "end": candidate["end"],
+                "action": "redact",
+                "origin": "automatic",
+                "entityType": "MONEY",
+                "sourceLocator": candidate["sourceLocator"],
+                "confirmed": True,
+            })
+
+        assert len(decisions) == 2
+        rc, stderr, audit, _, out_path = self._run_docx_decisions(
+            body_and_header_docx, decisions, tmp_path, source_map
+        )
+
+        assert rc == 0, f"Cross-part verification failed: {stderr}"
+        assert audit["residual_scan"]["passed"] is True
+        from docx import Document
+        doc = Document(str(out_path))
+        assert "15000元" not in doc.paragraphs[0].text
+        assert "50000元" not in doc.sections[0].header.paragraphs[0].text
+
+    def test_docx_rejects_client_locator_override(
+        self, sample_docx_file, tmp_path
+    ):
+        """A decision cannot redirect a source-map block to another paragraph."""
+        manifest, source_map = self._prepare_docx(tmp_path, sample_docx_file)
+        candidate = manifest["candidates"][0]
+        locator = dict(candidate["sourceLocator"])
+        locator["paragraph_index"] += 1
+        decisions = [{
+            "id": candidate["id"],
+            "blockId": candidate["blockId"],
+            "start": candidate["start"],
+            "end": candidate["end"],
+            "action": "redact",
+            "origin": "automatic",
+            "entityType": candidate["entityType"],
+            "sourceLocator": locator,
+            "confirmed": True,
+        }]
+
+        rc, _, _, _, out_path = self._run_docx_decisions(
+            sample_docx_file, decisions, tmp_path, source_map
+        )
+
+        assert rc != 0
+        assert not out_path.exists()
 
 
 class TestB1MoneyTime:

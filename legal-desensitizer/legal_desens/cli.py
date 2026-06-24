@@ -241,27 +241,31 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
             key = f"{seg['part']}:{seg['paragraph_index']}"
             seg_index[key] = seg["text"]
 
-        # Group applied decisions by paragraph to handle position shifts
+        # Group by OOXML part and paragraph. Paragraph indexes restart in
+        # every part (document, headers, footers, comments, etc.).
         from collections import defaultdict
         para_applied = defaultdict(list)
         for applied in app_result.applied:
+            part = applied.get("part")
             para_idx = applied.get("paragraph")
-            if para_idx is not None:
-                para_applied[para_idx].append(applied)
+            if not part or para_idx is None:
+                residual_findings.append({
+                    "type": "source_locator_missing",
+                    "decision_id": applied.get("decision_id"),
+                })
+                continue
+            para_applied[(part, para_idx)].append(applied)
 
-        for para_idx, applied_list in para_applied.items():
-            # Get the decision for part name
-            first_decision = next(
-                (d for d in decisions if d.get("id") == applied_list[0].get("decision_id")),
-                None
-            )
-            if not first_decision:
-                continue
-            part = first_decision.get("sourceLocator", {}).get("part", "word/document.xml")
+        for (part, para_idx), applied_list in para_applied.items():
             key = f"{part}:{para_idx}"
-            exported_para = seg_index.get(key, "")
-            if not exported_para:
+            if key not in seg_index:
+                residual_findings.append({
+                    "type": "exported_paragraph_missing",
+                    "part": part,
+                    "paragraph": para_idx,
+                })
                 continue
+            exported_para = seg_index[key]
 
             # Sort by original_start to track position shifts from replacements
             applied_list.sort(key=lambda a: a.get("original_start", 0))
@@ -276,23 +280,6 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
 
                 original = entity.get("original", "")
                 replacement = entity.get("replacement", "")
-
-                # Only check redact decisions (keep decisions should have original at position)
-                decision = next((d for d in decisions if d.get("id") == applied.get("decision_id")), None)
-                if not decision or decision.get("action") != "redact":
-                    # For keep: verify original is still there
-                    check_start = applied.get("original_start", 0) + offset_delta
-                    check_end = check_start + len(original)
-                    if check_end <= len(exported_para):
-                        actual = exported_para[check_start:check_end]
-                        if actual != original:
-                            residual_findings.append({
-                                "type": "keep_text_missing",
-                                "decision_id": applied.get("decision_id"),
-                                "expected": original[:20],
-                                "actual": actual[:20],
-                            })
-                    continue
 
                 # For redact: verify replacement is at the expected position
                 check_start = applied.get("original_start", 0) + offset_delta
