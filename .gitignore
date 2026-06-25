@@ -7,3 +7,4 @@ legal-desensitizer/.pytest_cache/
 legal-desensitizer/dist/
 legal-desensitizer/build/
 legal-desensitizer/contract_output/
+legal-desensitizer/spike_ocr_eval/output/
