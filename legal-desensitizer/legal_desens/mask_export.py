@@ -44,6 +44,7 @@ class PageOCRBox:
     width: float
     height: float
     confidence: float
+    entity_type: Optional[str] = None  # Tagged by rules matching
 
 
 @dataclass
@@ -93,8 +94,15 @@ def ocr_pages_to_normalized_boxes(
     pdf_path: str,
     dpi: int = 200,
     confidence_threshold: float = 0.7,
+    rules_path: Optional[str] = None,
 ) -> Tuple[List[PageOCRBox], dict]:
     """OCR each page and return boxes in page-normalized coordinates.
+
+    Args:
+        pdf_path: Path to PDF file.
+        dpi: Render DPI (default 200).
+        confidence_threshold: OCR confidence threshold.
+        rules_path: Optional path to rules.json for entity type tagging.
 
     Returns:
         (ocr_boxes, manifest) where manifest has per-page metadata.
@@ -105,6 +113,33 @@ def ocr_pages_to_normalized_boxes(
     from .engine.ocr import get_rapidocr_instance, run_rapidocr
 
     import fitz
+    import re as re_module
+
+    # Load rules for entity type tagging
+    rules = []
+    if rules_path:
+        try:
+            with open(rules_path, "r", encoding="utf-8") as f:
+                rules = json.load(f)
+            if not isinstance(rules, list):
+                rules = []
+        except (FileNotFoundError, json.JSONDecodeError):
+            rules = []
+
+    def _tag_text(text: str) -> Optional[str]:
+        """Run rules against text and return the first matching entity type."""
+        for rule in rules:
+            if not rule.get("enabled", True):
+                continue
+            pattern = rule.get("pattern")
+            if not pattern:
+                continue
+            try:
+                if re_module.search(pattern, text):
+                    return rule.get("entity_type", "CUSTOM")
+            except re_module.error:
+                continue
+        return None
 
     result = render_pdf_pages(pdf_path, dpi=dpi)
     doc = fitz.open(pdf_path)
@@ -141,6 +176,9 @@ def ocr_pages_to_normalized_boxes(
                 nw = (max_x - min_x) / img_w
                 nh = (max_y - min_y) / img_h
 
+                # Tag with entity type if rules provided
+                entity_type = _tag_text(line.text)
+
                 ocr_boxes.append(PageOCRBox(
                     text=line.text,
                     page=i + 1,
@@ -149,6 +187,7 @@ def ocr_pages_to_normalized_boxes(
                     width=nw,
                     height=nh,
                     confidence=line.confidence,
+                    entity_type=entity_type,
                 ))
 
             pages_meta.append({
@@ -410,6 +449,151 @@ def mask_export_text_pdf(
 
 # ─── Unified export ───────────────────────────────────────────
 
+def _find_denylist_boxes_text_pdf(
+    source_path: str,
+    denylist: List[str],
+) -> List[MaskBox]:
+    """Find denylist terms in text PDF layer and create masking boxes."""
+    _check_fitz()
+    import fitz
+
+    boxes = []
+    doc = fitz.open(source_path)
+    try:
+        for page_idx in range(len(doc)):
+            page = doc[page_idx]
+            page_w = page.rect.width
+            page_h = page.rect.height
+            page_text = page.get_text()
+
+            for term in denylist:
+                if not term or term not in page_text:
+                    continue
+                # Search for all occurrences
+                rects = page.search_for(term)
+                for rect in rects:
+                    # Convert PDF point rect to normalized coords
+                    nx = rect.x0 / page_w
+                    ny = rect.y0 / page_h
+                    nw = (rect.x1 - rect.x0) / page_w
+                    nh = (rect.y1 - rect.y0) / page_h
+                    boxes.append(MaskBox(
+                        id=f"deny_{page_idx+1}_{len(boxes)}",
+                        page=page_idx + 1,
+                        x=nx, y=ny, width=nw, height=nh,
+                        source="denylist",
+                        entity_type="DENYLIST",
+                    ))
+    finally:
+        doc.close()
+    return boxes
+
+
+def _find_denylist_boxes_scan_pdf(
+    source_path: str,
+    denylist: List[str],
+    dpi: int = 200,
+) -> Tuple[List[MaskBox], dict]:
+    """Find denylist terms via OCR in scan PDF and create masking boxes."""
+    _check_fitz()
+    _check_pil()
+    from .adapters.pdf_adapter import render_pdf_pages
+    from .engine.ocr import get_rapidocr_instance, run_rapidocr
+
+    result = render_pdf_pages(source_path, dpi=dpi)
+    boxes = []
+    pages_meta = []
+
+    try:
+        engine = get_rapidocr_instance()
+        for page_img in result.page_images:
+            page_num = page_img.page_number
+            img_w = page_img.width
+            img_h = page_img.height
+
+            ocr_result = run_rapidocr(page_img.image_path, engine=engine)
+
+            for line in ocr_result.lines:
+                for term in denylist:
+                    if term in line.text:
+                        # Convert OCR box to normalized coords
+                        xs = [p[0] for p in line.box]
+                        ys = [p[1] for p in line.box]
+                        min_x, max_x = min(xs), max(xs)
+                        min_y, max_y = min(ys), max(ys)
+
+                        boxes.append(MaskBox(
+                            id=f"deny_ocr_{page_num}_{len(boxes)}",
+                            page=page_num,
+                            x=min_x / img_w,
+                            y=min_y / img_h,
+                            width=(max_x - min_x) / img_w,
+                            height=(max_y - min_y) / img_h,
+                            source="denylist",
+                            entity_type="DENYLIST",
+                        ))
+
+            pages_meta.append({
+                "pageNumber": page_num,
+                "imageWidth": img_w,
+                "imageHeight": img_h,
+                "dpi": dpi,
+            })
+    finally:
+        import shutil
+        temp_dir = Path(result.page_images[0].image_path).parent if result.page_images else None
+        if temp_dir and temp_dir.name.startswith("legal_desens_pdf_"):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return boxes, {"pages": pages_meta}
+
+
+def _verify_denylist_masked(
+    output_path: str,
+    denylist: List[str],
+    document_kind: str,
+) -> List[str]:
+    """Verify that denylist terms are not extractable from output."""
+    if not denylist:
+        return []
+
+    leaked = []
+    if document_kind == "pdf-text":
+        _check_fitz()
+        import fitz
+        doc = fitz.open(output_path)
+        try:
+            for page in doc:
+                page_text = page.get_text()
+                for term in denylist:
+                    if term in page_text:
+                        leaked.append(term)
+        finally:
+            doc.close()
+    else:
+        # For scan PDF, run OCR verification
+        _check_pil()
+        from .adapters.pdf_adapter import render_pdf_pages
+        from .engine.ocr import get_rapidocr_instance, run_rapidocr
+
+        result = render_pdf_pages(output_path, dpi=200)
+        try:
+            engine = get_rapidocr_instance()
+            for page_img in result.page_images:
+                ocr_result = run_rapidocr(page_img.image_path, engine=engine)
+                full_text = " ".join(line.text for line in ocr_result.lines)
+                for term in denylist:
+                    if term in full_text and term not in leaked:
+                        leaked.append(term)
+        finally:
+            import shutil
+            temp_dir = Path(result.page_images[0].image_path).parent if result.page_images else None
+            if temp_dir and temp_dir.name.startswith("legal_desens_pdf_"):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return leaked
+
+
 def mask_export(
     source_path: str,
     output_path: str,
@@ -430,18 +614,41 @@ def mask_export(
         rules_path: Path to merged rules.json (for entity detection).
         denylist: List of forced redaction terms (always mask these).
     """
-    # If denylist provided, add denylist-based boxes
+    # Find denylist terms and create boxes for them
+    denylist_boxes = []
     if denylist:
-        # For scan PDFs, we'd need OCR to find denylist terms
-        # For text PDFs, we can search the text layer
-        pass  # Denylist integration handled at workbench level
+        if document_kind == "pdf-text":
+            denylist_boxes = _find_denylist_boxes_text_pdf(source_path, denylist)
+        else:
+            denylist_boxes, _ = _find_denylist_boxes_scan_pdf(source_path, denylist, dpi=dpi)
+
+    # Merge user boxes + denylist boxes (deduplicate by page+coords)
+    all_boxes = list(boxes) + denylist_boxes
+
+    if not all_boxes:
+        raise ValueError("No boxes to mask (neither user boxes nor denylist matches)")
 
     if document_kind == "pdf-text":
-        return mask_export_text_pdf(source_path, output_path, boxes)
+        result = mask_export_text_pdf(source_path, output_path, all_boxes)
     elif document_kind == "pdf-scan":
-        return mask_export_scan_pdf(source_path, output_path, boxes, dpi=dpi)
+        result = mask_export_scan_pdf(source_path, output_path, all_boxes, dpi=dpi)
     elif document_kind == "pdf-hybrid":
-        # For hybrid, treat as scan (render all pages as images)
-        return mask_export_scan_pdf(source_path, output_path, boxes, dpi=dpi)
+        result = mask_export_scan_pdf(source_path, output_path, all_boxes, dpi=dpi)
     else:
         raise ValueError(f"Unsupported document kind for masking: {document_kind}")
+
+    # Verify denylist terms are not extractable
+    if denylist:
+        leaked = _verify_denylist_masked(output_path, denylist, document_kind)
+        if leaked:
+            # Fail-closed: delete output if denylist terms leaked
+            Path(output_path).unlink(missing_ok=True)
+            raise RuntimeError(
+                f"Denylist verification failed: leaked terms: {leaked}. "
+                f"Output deleted."
+            )
+        result.audit["denylist_verified"] = True
+        result.audit["denylist_terms"] = len(denylist)
+        result.audit["denylist_boxes_created"] = len(denylist_boxes)
+
+    return result

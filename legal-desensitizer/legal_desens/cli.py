@@ -1145,6 +1145,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
             args.input,
             dpi=getattr(args, "dpi", 200),
             confidence_threshold=getattr(args, "confidence", 0.7),
+            rules_path=getattr(args, "rules", None),
         )
     except (FileNotFoundError, ValueError, ImportError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -1160,6 +1161,7 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
                 "width": round(box.width, 6),
                 "height": round(box.height, 6),
                 "confidence": round(box.confidence, 4),
+                "entityType": box.entity_type,
             }
             for box in ocr_boxes
         ],
@@ -1209,10 +1211,6 @@ def _cmd_mask_export(args: argparse.Namespace) -> int:
             source=b.get("source", "manual"),
             entity_type=b.get("entityType"),
         ))
-
-    if not boxes:
-        print("Error: no boxes to mask", file=sys.stderr)
-        return 1
 
     doc_kind = getattr(args, "document_kind", "pdf-text")
     dpi = getattr(args, "dpi", 200)
@@ -1608,6 +1606,8 @@ def main(argv=None):
                            help="Render DPI (default: 200)")
     p_analyze.add_argument("--confidence", type=float, default=0.7,
                            help="OCR confidence threshold (default: 0.7)")
+    p_analyze.add_argument("--rules", default=None,
+                           help="Path to rules JSON for entity type tagging")
     p_analyze.add_argument("--out", default=None,
                            help="Output JSON file")
 

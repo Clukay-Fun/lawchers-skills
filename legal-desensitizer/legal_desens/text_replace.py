@@ -21,6 +21,7 @@ PDF star/placeholder → export as TXT/MD/DOCX (no PDF write-back).
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -374,6 +375,50 @@ def export_docx(
 
 # ─── Unified text export ─────────────────────────────────────
 
+def _load_rules_and_detect(text: str, rules_path: str) -> List[dict]:
+    """Load rules.json and run regex detection on text.
+
+    Returns list of entity dicts with {original, entity_type, start, end}.
+    """
+    import re as re_module
+
+    try:
+        with open(rules_path, "r", encoding="utf-8") as f:
+            rules = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    if not isinstance(rules, list):
+        return []
+
+    entities = []
+    for rule in rules:
+        if not rule.get("enabled", True):
+            continue
+        pattern = rule.get("pattern")
+        if not pattern:
+            continue
+        entity_type = rule.get("entity_type", "CUSTOM")
+        try:
+            compiled = re_module.compile(pattern)
+        except re_module.error:
+            continue  # Skip invalid regex
+
+        for match in compiled.finditer(text):
+            original = match.group(0)
+            if original and len(original) >= 2:
+                entities.append({
+                    "original": original,
+                    "entity_type": entity_type,
+                    "start": match.start(),
+                    "end": match.end(),
+                    "source": "rule",
+                    "rule_id": rule.get("id"),
+                })
+
+    return entities
+
+
 def text_export(
     source_path: str,
     output_path: str,
@@ -394,7 +439,7 @@ def text_export(
         mode: 'star' or 'placeholder'.
         export_format: 'txt', 'md', or 'docx'.
         ocr_text: Pre-extracted OCR text (for PDF sources).
-        rules_path: Path to rules.json (for additional detection).
+        rules_path: Path to rules.json (for additional regex detection).
         denylist: List of forced redaction terms.
         whitelist: List of terms to skip (never redact).
     """
@@ -416,6 +461,17 @@ def text_export(
         # PDF or other — require ocr_text
         raise ValueError(f"Cannot extract text from {ext}. Provide ocr_text parameter.")
 
+    # Load rules and run regex detection on text
+    if rules_path:
+        rule_entities = _load_rules_and_detect(text, rules_path)
+        # Merge with passed-in entities (deduplicate by position)
+        existing_positions = {(e.get("start"), e.get("end")) for e in entities}
+        for re_entity in rule_entities:
+            pos = (re_entity.get("start"), re_entity.get("end"))
+            if pos not in existing_positions:
+                entities.append(re_entity)
+                existing_positions.add(pos)
+
     # Apply whitelist: remove entities that match whitelist terms
     if whitelist:
         filtered_entities = []
@@ -431,7 +487,7 @@ def text_export(
         existing_originals = {e.get("original", "") for e in entities}
         for term in denylist:
             if term in text and term not in existing_originals:
-                # Find position in text
+                # Find all occurrences in text
                 idx = text.find(term)
                 while idx >= 0:
                     entities.append({
