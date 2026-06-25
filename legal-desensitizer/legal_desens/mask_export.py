@@ -230,6 +230,91 @@ def ocr_pages_to_normalized_boxes(
     return ocr_boxes, manifest
 
 
+def refine_boxes_to_entities(
+    ocr_boxes: List[PageOCRBox],
+    text_entities: List[dict],
+    ocr_text: str,
+) -> List[PageOCRBox]:
+    """Split OCR line-level boxes into entity-level sub-boxes.
+
+    Given:
+    - ocr_boxes: line-level boxes from OCR (each covers an entire line)
+    - text_entities: detected entities with precise start/end in ocr_text
+    - ocr_text: full OCR text (joined by \\n)
+
+    Returns refined boxes where each entity in text_entities maps to a
+    sub-box within the corresponding OCR line. Lines without entities
+    are dropped (they contain no sensitive content).
+
+    For horizontal text: entity position within a line is computed by
+    character-width proportioning (line width / line text length).
+    """
+    if not text_entities or not ocr_boxes:
+        return []
+
+    # Build line offset map: for each OCR box, compute its start/end in ocr_text
+    line_offsets = []  # (box_index, start_in_text, end_in_text)
+    offset = 0
+    for i, box in enumerate(ocr_boxes):
+        line_len = len(box.text)
+        line_offsets.append((i, offset, offset + line_len))
+        offset += line_len + 1  # +1 for \n join
+
+    refined: List[PageOCRBox] = []
+
+    for entity in text_entities:
+        ent_start = entity.get("start", 0)
+        ent_end = entity.get("end", 0)
+        ent_text = entity.get("original", "")
+        ent_type = entity.get("entity_type", "")
+
+        if ent_start >= ent_end or not ent_text:
+            continue
+
+        # Find which OCR line(s) this entity spans
+        for box_idx, line_start, line_end in line_offsets:
+            # Check overlap
+            overlap_start = max(ent_start, line_start)
+            overlap_end = min(ent_end, line_end)
+            if overlap_start >= overlap_end:
+                continue
+
+            box = ocr_boxes[box_idx]
+            line_text = box.text
+            line_len = len(line_text)
+
+            if line_len == 0:
+                continue
+
+            # Character position within the line
+            char_start_in_line = max(0, overlap_start - line_start)
+            char_end_in_line = min(line_len, overlap_end - line_start)
+
+            # Horizontal proportioning: split line width by character count
+            line_width = box.width
+            char_width = line_width / line_len
+
+            sub_x = box.x + char_start_in_line * char_width
+            sub_width = (char_end_in_line - char_start_in_line) * char_width
+
+            # Clamp to [0,1]
+            sub_x = max(0.0, min(1.0, sub_x))
+            sub_width = max(0.001, min(1.0 - sub_x, sub_width))
+
+            refined.append(PageOCRBox(
+                text=ent_text,
+                page=box.page,
+                x=round(sub_x, 6),
+                y=box.y,
+                width=round(sub_width, 6),
+                height=box.height,
+                confidence=box.confidence,
+                entity_type=ent_type,
+            ))
+
+    return refined
+
+
 # ─── Scan PDF masking ─────────────────────────────────────────
 
 def mask_export_scan_pdf(
