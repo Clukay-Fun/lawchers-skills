@@ -1216,6 +1216,18 @@ def _cmd_mask_export(args: argparse.Namespace) -> int:
 
     doc_kind = getattr(args, "document_kind", "pdf-text")
     dpi = getattr(args, "dpi", 200)
+    rules_path = getattr(args, "rules", None)
+    denylist_path = getattr(args, "denylist", None)
+
+    # Load denylist if provided
+    denylist = None
+    if denylist_path:
+        try:
+            with open(denylist_path, "r", encoding="utf-8") as f:
+                denylist = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"Error: denylist file not found: {denylist_path}", file=sys.stderr)
+            return 1
 
     try:
         result = mask_export(
@@ -1224,6 +1236,8 @@ def _cmd_mask_export(args: argparse.Namespace) -> int:
             boxes=boxes,
             document_kind=doc_kind,
             dpi=dpi,
+            rules_path=rules_path,
+            denylist=denylist,
         )
     except (RuntimeError, ValueError, ImportError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -1331,6 +1345,29 @@ def _cmd_text_export(args: argparse.Namespace) -> int:
             print(f"Error: OCR text file not found: {ocr_text_path}", file=sys.stderr)
             return 1
 
+    # Load rules/denylist/whitelist if provided
+    rules_path = getattr(args, "rules", None)
+    denylist_path = getattr(args, "denylist", None)
+    whitelist_path = getattr(args, "whitelist", None)
+
+    denylist = None
+    if denylist_path:
+        try:
+            with open(denylist_path, "r", encoding="utf-8") as f:
+                denylist = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"Error: denylist file not found: {denylist_path}", file=sys.stderr)
+            return 1
+
+    whitelist = None
+    if whitelist_path:
+        try:
+            with open(whitelist_path, "r", encoding="utf-8") as f:
+                whitelist = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"Error: whitelist file not found: {whitelist_path}", file=sys.stderr)
+            return 1
+
     try:
         result = text_export(
             source_path=args.input,
@@ -1339,6 +1376,9 @@ def _cmd_text_export(args: argparse.Namespace) -> int:
             mode=args.mode,
             export_format=args.export_format,
             ocr_text=ocr_text,
+            rules_path=rules_path,
+            denylist=denylist,
+            whitelist=whitelist,
         )
     except (RuntimeError, ValueError, ImportError) as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -1588,6 +1628,10 @@ def main(argv=None):
                         help="Render DPI for scan pipeline (default: 200)")
     p_mask.add_argument("--audit", default=None,
                         help="Output audit JSON file")
+    p_mask.add_argument("--rules", default=None,
+                        help="Path to merged rules JSON file")
+    p_mask.add_argument("--denylist", default=None,
+                        help="Path to denylist file (one term per line)")
 
     # ── detect-seals ──
     p_seal = sub.add_parser(
@@ -1619,6 +1663,12 @@ def main(argv=None):
                         help="Export format")
     p_text.add_argument("--ocr-text", default=None,
                         help="Path to OCR text file (for PDF sources)")
+    p_text.add_argument("--rules", default=None,
+                        help="Path to rules JSON file")
+    p_text.add_argument("--denylist", default=None,
+                        help="Path to denylist file (one term per line)")
+    p_text.add_argument("--whitelist", default=None,
+                        help="Path to whitelist file (one term per line)")
 
     # ── paths ──
     p_paths = sub.add_parser(

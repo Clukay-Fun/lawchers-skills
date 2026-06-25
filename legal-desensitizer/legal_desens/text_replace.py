@@ -381,6 +381,9 @@ def text_export(
     mode: str,  # 'star' | 'placeholder'
     export_format: str,  # 'txt' | 'md' | 'docx'
     ocr_text: Optional[str] = None,
+    rules_path: Optional[str] = None,
+    denylist: Optional[List[str]] = None,
+    whitelist: Optional[List[str]] = None,
 ) -> dict:
     """Unified text export with star/placeholder replacement.
 
@@ -391,6 +394,9 @@ def text_export(
         mode: 'star' or 'placeholder'.
         export_format: 'txt', 'md', or 'docx'.
         ocr_text: Pre-extracted OCR text (for PDF sources).
+        rules_path: Path to rules.json (for additional detection).
+        denylist: List of forced redaction terms.
+        whitelist: List of terms to skip (never redact).
     """
     ext = Path(source_path).suffix.lower()
 
@@ -409,6 +415,35 @@ def text_export(
     else:
         # PDF or other — require ocr_text
         raise ValueError(f"Cannot extract text from {ext}. Provide ocr_text parameter.")
+
+    # Apply whitelist: remove entities that match whitelist terms
+    if whitelist:
+        filtered_entities = []
+        for entity in entities:
+            original = entity.get("original", "")
+            if any(wl in original for wl in whitelist):
+                continue  # Skip whitelisted terms
+            filtered_entities.append(entity)
+        entities = filtered_entities
+
+    # Apply denylist: add entities for denylist terms not already covered
+    if denylist:
+        existing_originals = {e.get("original", "") for e in entities}
+        for term in denylist:
+            if term in text and term not in existing_originals:
+                # Find position in text
+                idx = text.find(term)
+                while idx >= 0:
+                    entities.append({
+                        "original": term,
+                        "entity_type": "DENYLIST",
+                        "start": idx,
+                        "end": idx + len(term),
+                    })
+                    idx = text.find(term, idx + 1)
+
+    # Sort entities by position
+    entities.sort(key=lambda e: e.get("start", 0))
 
     # Build replacements
     counter = PlaceholderCounter() if mode == "placeholder" else None
