@@ -1392,11 +1392,9 @@ def _cmd_text_export(args: argparse.Namespace) -> int:
 
 def _cmd_paths(args: argparse.Namespace) -> int:
     """Output installed resource paths as JSON."""
-    import importlib.resources as pkg_resources
+    from .rules import _default_rules_path
 
-    # Locate rules.json inside the installed package
-    rules_ref = pkg_resources.files("legal_desens").joinpath("rules").joinpath("rules.json")
-    rules_path = str(rules_ref)
+    rules_path = str(_default_rules_path())
 
     if args.json or True:
         output = {"rules": rules_path}
