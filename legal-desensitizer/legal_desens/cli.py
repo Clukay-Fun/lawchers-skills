@@ -1029,6 +1029,20 @@ def _cmd_ner_spans(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_paths(args: argparse.Namespace) -> int:
+    """Output installed resource paths as JSON."""
+    import importlib.resources as pkg_resources
+
+    # Locate rules.json inside the installed package
+    rules_ref = pkg_resources.files("legal_desens").joinpath("rules").joinpath("rules.json")
+    rules_path = str(rules_ref)
+
+    if args.json or True:
+        output = {"rules": rules_path}
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="legal-desens",
@@ -1206,7 +1220,15 @@ def main(argv=None):
     p_prepare.add_argument("--manifest", default=None,
                            help="Output manifest JSON file")
     p_prepare.add_argument("--map", default=None,
-                           help="Output source map JSON file")
+                            help="Output source map JSON file")
+
+    # ── paths ──
+    p_paths = sub.add_parser(
+        "paths",
+        help="Output installed resource paths as JSON",
+    )
+    p_paths.add_argument("--json", action="store_true", default=True,
+                         help="Output as JSON (default)")
 
     args = parser.parse_args(argv)
 
@@ -1225,6 +1247,7 @@ def main(argv=None):
         "parse": _cmd_parse,
         "batch-redact-case": _cmd_batch_redact_case,
         "prepare": _cmd_prepare,
+        "paths": _cmd_paths,
     }
 
     handler = handlers.get(args.command)
