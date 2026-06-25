@@ -287,21 +287,49 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
 
     # Write audit
     if args.audit:
-        audit_data = {
-            "schema_version": "1.0",
-            "summary": {
-                "total_entities": len(map_data.get("entities", [])),
-                "total_occurrences": len(map_data.get("occurrences", [])),
-                "redact_requested": app_result.redact_requested,
-                "redact_applied": app_result.redact_applied,
-            },
-            "residual_scan": {
-                "passed": residual_passed,
-                "findings": residual_findings,
-                "method": "applied_position_verification",
-            },
-            "export_mode": "decisions",
-        }
+        # Determine residual verification flags
+        if fmt == "irreversible" and ext == ".pdf":
+            # PDF uses rect-based verification with three flags
+            pdf_audit_flags = map_data.get("audit_flags", {})
+            original_removed = pdf_audit_flags.get("original_removed", False)
+            replacement_written = pdf_audit_flags.get("replacement_written", False)
+            position_verification = pdf_audit_flags.get("position_verification", False)
+            four_way_ok = len(residual_findings) == 0
+            residual_passed = original_removed and replacement_written and position_verification and four_way_ok
+            audit_data = {
+                "schema_version": "1.0",
+                "summary": {
+                    "total_entities": len(map_data.get("entities", [])),
+                    "total_occurrences": len(map_data.get("occurrences", [])),
+                    "redact_requested": app_result.redact_requested,
+                    "redact_applied": app_result.redact_applied,
+                },
+                "residual_scan": {
+                    "original_removed": original_removed and four_way_ok,
+                    "replacement_written": replacement_written,
+                    "position_verification": position_verification and four_way_ok,
+                    "passed": residual_passed,
+                    "findings": residual_findings,
+                    "method": "rect_based_extraction",
+                },
+                "export_mode": "decisions",
+            }
+        else:
+            audit_data = {
+                "schema_version": "1.0",
+                "summary": {
+                    "total_entities": len(map_data.get("entities", [])),
+                    "total_occurrences": len(map_data.get("occurrences", [])),
+                    "redact_requested": app_result.redact_requested,
+                    "redact_applied": app_result.redact_applied,
+                },
+                "residual_scan": {
+                    "passed": residual_passed,
+                    "findings": residual_findings,
+                    "method": "applied_position_verification",
+                },
+                "export_mode": "decisions",
+            }
         with open(args.audit, "w", encoding="utf-8") as f:
             json.dump(audit_data, f, ensure_ascii=False, indent=2)
 
