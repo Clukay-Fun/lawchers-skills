@@ -1057,6 +1057,78 @@ def _cmd_ner_spans(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_render_pages(args: argparse.Namespace) -> int:
+    """Render PDF pages to images with coordinate metadata.
+
+    Outputs a manifest JSON with per-page info:
+      - pageNumber (1-indexed)
+      - imagePath (relative to output dir)
+      - imageWidth, imageHeight (pixels at render DPI)
+      - pageWidth, pageHeight (PDF points, 1 pt = 1/72 inch)
+      - dpi (render resolution)
+
+    Coordinate contract (shared with workbench):
+      - Page coordinates: PDF point, origin = top-left (fitz convention)
+      - Render coordinates: image pixels at `dpi`, origin = top-left
+      - page-normalized: (x/pageWidth, y/pageHeight) ∈ [0,1]
+    """
+    from .adapters.pdf_adapter import render_pdf_pages
+
+    input_path = args.input
+    dpi = getattr(args, "dpi", 200)
+    output_dir = getattr(args, "out_dir", None)
+
+    try:
+        result = render_pdf_pages(input_path, dpi=dpi, output_dir=output_dir)
+    except (FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Build manifest with page dimensions
+    import fitz
+    doc = fitz.open(input_path)
+    pages = []
+    try:
+        for i, img in enumerate(result.page_images):
+            page = doc[i]
+            # fitz page.rect gives PDF points (width, height)
+            # Origin is top-left in fitz coordinate space
+            pw = page.rect.width
+            ph = page.rect.height
+            pages.append({
+                "pageNumber": img.page_number,
+                "imagePath": img.image_path,
+                "imageWidth": img.width,
+                "imageHeight": img.height,
+                "pageWidth": round(pw, 2),
+                "pageHeight": round(ph, 2),
+                "dpi": dpi,
+            })
+    finally:
+        doc.close()
+
+    manifest = {
+        "sourceFile": str(Path(input_path).name),
+        "totalPages": result.total_pages,
+        "dpi": dpi,
+        "pages": pages,
+    }
+
+    out_file = getattr(args, "out", None)
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        print(f"Render manifest: {out_file}", file=sys.stderr)
+    else:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    print(
+        f"Render complete: {result.total_pages} pages @ {result.total_pages} DPI",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_paths(args: argparse.Namespace) -> int:
     """Output installed resource paths as JSON."""
     import importlib.resources as pkg_resources
@@ -1250,6 +1322,19 @@ def main(argv=None):
     p_prepare.add_argument("--map", default=None,
                             help="Output source map JSON file")
 
+    # ── render-pages ──
+    p_render = sub.add_parser(
+        "render-pages",
+        help="Render PDF pages to images with coordinate metadata for visual redaction",
+    )
+    p_render.add_argument("input", help="Input PDF file")
+    p_render.add_argument("--dpi", type=int, default=200,
+                          help="Render DPI (default: 200)")
+    p_render.add_argument("--out-dir", default=None,
+                          help="Output directory for page images")
+    p_render.add_argument("--out", default=None,
+                          help="Output manifest JSON file")
+
     # ── paths ──
     p_paths = sub.add_parser(
         "paths",
@@ -1276,6 +1361,7 @@ def main(argv=None):
         "batch-redact-case": _cmd_batch_redact_case,
         "prepare": _cmd_prepare,
         "paths": _cmd_paths,
+        "render-pages": _cmd_render_pages,
     }
 
     handler = handlers.get(args.command)
