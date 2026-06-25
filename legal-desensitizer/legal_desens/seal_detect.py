@@ -4,11 +4,13 @@ Best-effort: may miss seals, may false-positive. User can adjust/delete.
 
 Detection pipeline:
 1. Convert page image to HSV
-2. Threshold red hue (H: 0-10 ∪ 170-180, S: 80-255, V: 80-255)
-3. Morphological close to fill gaps
+2. Threshold red hue (H: 0-15 ∪ 165-180, S: 50-255, V: 50-255)
+   - Widened from P5 (0-10/170-180, S:80, V:80) for darker/lighter seals
+3. Morphological close + open to fill gaps and remove noise
 4. Find contours
-5. Filter by: area > min_area, circularity > min_circularity
-6. Return bounding boxes in page-normalized coordinates
+5. Filter by: area, circularity, aspect ratio (reject thin rectangles)
+6. Fit ellipse for oval seals (circularity alone rejects ovals)
+7. Return bounding boxes in page-normalized coordinates
 """
 
 from __future__ import annotations
@@ -57,9 +59,10 @@ def detect_seals_in_image(
     page_number: int = 1,
     image_width: Optional[int] = None,
     image_height: Optional[int] = None,
-    min_area_ratio: float = 0.001,     # min 0.1% of page area
-    max_area_ratio: float = 0.15,      # max 15% of page area
-    min_circularity: float = 0.4,      # fairly round
+    min_area_ratio: float = 0.0005,    # min 0.05% of page area (lowered for small seals)
+    max_area_ratio: float = 0.20,      # max 20% of page area (raised for large seals)
+    min_circularity: float = 0.30,     # lowered to catch oval seals
+    min_aspect_ratio: float = 0.3,     # reject thin shapes (width/height or height/width < 0.3)
 ) -> List[SealBox]:
     """Detect red seals/stamps in an image.
 
@@ -71,6 +74,7 @@ def detect_seals_in_image(
         min_area_ratio: Minimum contour area as fraction of image area.
         max_area_ratio: Maximum contour area as fraction of image area.
         min_circularity: Minimum circularity score (0-1).
+        min_aspect_ratio: Minimum aspect ratio (rejects thin rectangles).
 
     Returns:
         List of SealBox in page-normalized coordinates.
@@ -96,19 +100,25 @@ def detect_seals_in_image(
     # Convert to HSV
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    # Red hue: 0-10 and 170-180
-    lower_red1 = np.array([0, 80, 80])
-    upper_red1 = np.array([10, 255, 255])
-    lower_red2 = np.array([170, 80, 80])
+    # Red hue: widened range for darker/lighter seals
+    # H: 0-15 (bright red) and 165-180 (wrap-around red)
+    # S: 50-255 (lowered from 80 for darker seals)
+    # V: 50-255 (lowered from 80 for darker seals)
+    lower_red1 = np.array([0, 50, 50])
+    upper_red1 = np.array([15, 255, 255])
+    lower_red2 = np.array([165, 50, 50])
     upper_red2 = np.array([180, 255, 255])
 
     mask1 = cv2.inRange(hsv, lower_red1, upper_red1)
     mask2 = cv2.inRange(hsv, lower_red2, upper_red2)
     red_mask = cv2.bitwise_or(mask1, mask2)
 
-    # Morphological close to fill small gaps
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    # Morphological operations: close to fill gaps, open to remove noise
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel_close, iterations=3)
+
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    red_mask = cv2.morphologyEx(red_mask, cv2.MORPH_OPEN, kernel_open, iterations=1)
 
     # Find contours
     contours, _ = cv2.findContours(red_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -119,13 +129,32 @@ def detect_seals_in_image(
         if area < min_area or area > max_area:
             continue
 
+        # Aspect ratio filter: reject thin shapes (likely text)
+        rx, ry, rw, rh = cv2.boundingRect(contour)
+        aspect = min(rw, rh) / max(rw, rh) if max(rw, rh) > 0 else 0
+        if aspect < min_aspect_ratio:
+            continue
+
+        # Circularity: use both contour-based and ellipse-based
         circ = _circularity(contour)
+
+        # Also try ellipse fit for oval seals
+        if len(contour) >= 5:
+            ellipse = cv2.fitEllipse(contour)
+            (ecx, ecy), (ed1, ed2), angle = ellipse
+            # Ellipse area vs contour area ratio
+            ellipse_area = math.pi * (ed1 / 2) * (ed2 / 2)
+            contour_area = cv2.contourArea(contour)
+            if ellipse_area > 0:
+                ellipse_ratio = contour_area / ellipse_area
+                # Good ellipse fit: ratio close to 1.0
+                if ellipse_ratio > 0.6:
+                    circ = max(circ, 0.5)  # Boost circularity for good ellipse fits
+
         if circ < min_circularity:
             continue
 
-        # Bounding rect
-        rx, ry, rw, rh = cv2.boundingRect(contour)
-
+        # Bounding rect (already computed above)
         # Normalize to [0,1]
         nx = rx / w
         ny = ry / h
@@ -135,7 +164,7 @@ def detect_seals_in_image(
         seals.append(SealBox(
             page=page_number,
             x=round(nx, 6),
-            y=round(ry / h, 6),
+            y=round(ny, 6),
             width=round(nw, 6),
             height=round(nh, 6),
             confidence=round(circ, 4),
