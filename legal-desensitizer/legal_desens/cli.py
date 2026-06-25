@@ -1304,6 +1304,54 @@ def _cmd_detect_seals(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_text_export(args: argparse.Namespace) -> int:
+    """Export text with star/placeholder replacement.
+
+    Reads entities JSON and applies type-aware masking.
+    Supports TXT, MD, DOCX output formats.
+    PDF sources → export as TXT/MD/DOCX (no PDF write-back).
+    """
+    from .text_replace import text_export
+
+    entities_path = args.entities
+    try:
+        with open(entities_path, "r", encoding="utf-8") as f:
+            entities = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading entities: {e}", file=sys.stderr)
+        return 1
+
+    # Load OCR text if provided
+    ocr_text = None
+    ocr_text_path = getattr(args, "ocr_text", None)
+    if ocr_text_path:
+        try:
+            ocr_text = Path(ocr_text_path).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(f"Error: OCR text file not found: {ocr_text_path}", file=sys.stderr)
+            return 1
+
+    try:
+        result = text_export(
+            source_path=args.input,
+            output_path=args.out,
+            entities=entities,
+            mode=args.mode,
+            export_format=args.export_format,
+            ocr_text=ocr_text,
+        )
+    except (RuntimeError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Text export complete: {result['replacements_applied']} replacements, "
+        f"format={result['format']}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_paths(args: argparse.Namespace) -> int:
     """Output installed resource paths as JSON."""
     import importlib.resources as pkg_resources
@@ -1554,6 +1602,24 @@ def main(argv=None):
     p_seal.add_argument("--out", default=None,
                         help="Output JSON file")
 
+    # ── text-export ──
+    p_text = sub.add_parser(
+        "text-export",
+        help="Export text with star/placeholder replacement (TXT/MD/DOCX)",
+    )
+    p_text.add_argument("input", help="Input file (PDF, DOCX, TXT, MD)")
+    p_text.add_argument("--entities", required=True,
+                        help="Path to entities JSON (from analyze/prepare)")
+    p_text.add_argument("--out", required=True,
+                        help="Output file path")
+    p_text.add_argument("--mode", required=True, choices=["star", "placeholder"],
+                        help="Replacement mode")
+    p_text.add_argument("--format", required=True, choices=["txt", "md", "docx"],
+                        dest="export_format",
+                        help="Export format")
+    p_text.add_argument("--ocr-text", default=None,
+                        help="Path to OCR text file (for PDF sources)")
+
     # ── paths ──
     p_paths = sub.add_parser(
         "paths",
@@ -1584,6 +1650,7 @@ def main(argv=None):
         "analyze": _cmd_analyze,
         "mask-export": _cmd_mask_export,
         "detect-seals": _cmd_detect_seals,
+        "text-export": _cmd_text_export,
     }
 
     handler = handlers.get(args.command)
