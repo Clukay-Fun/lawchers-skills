@@ -387,6 +387,26 @@ def apply_decisions_pdf(
     if result.failed:
         return _empty_map(source_path), result
 
+    # Check for overlapping decisions within the same block
+    validated_by_block: Dict[str, List] = {}
+    for item in validated:
+        block_id = item[1]["id"]
+        validated_by_block.setdefault(block_id, []).append(item)
+
+    for block_id, items in validated_by_block.items():
+        sorted_items = sorted(items, key=lambda x: x[2])  # sort by local_start
+        for i in range(1, len(sorted_items)):
+            prev_end = sorted_items[i - 1][3]
+            curr_start = sorted_items[i][2]
+            if curr_start < prev_end:
+                result.failed.append({
+                    "decision_id": sorted_items[i][0].get("id"),
+                    "reason": f"overlaps with decision {sorted_items[i-1][0].get('id')} in block '{block_id}' at [{curr_start}:{prev_end}]"
+                })
+
+    if result.failed:
+        return _empty_map(source_path), result
+
     # Open the source PDF
     doc = fitz.open(source_path)
     try:
@@ -419,7 +439,8 @@ def apply_decisions_pdf(
                 cover_rect = fitz.Rect(min_x, min_y, max_x, max_y)
 
                 # Get the portion of replacement text for this page
-                # Find which chars of the original belong to this page
+                # char_rects is already sliced from char_map[local_start:local_end],
+                # so indices into char_rects are directly offsets into replacement.
                 page_char_indices = []
                 for i, cr in enumerate(char_rects):
                     if cr["page"] == page_num:
@@ -428,8 +449,8 @@ def apply_decisions_pdf(
                 if not page_char_indices:
                     continue
 
-                page_start_idx = page_char_indices[0] - local_start
-                page_end_idx = page_char_indices[-1] - local_start + 1
+                page_start_idx = page_char_indices[0]
+                page_end_idx = page_char_indices[-1] + 1
                 page_replacement = replacement[page_start_idx:page_end_idx]
 
                 # Save the rectangle BEFORE applying redactions
@@ -451,37 +472,66 @@ def apply_decisions_pdf(
                     doc[pn - 1].apply_redactions()
 
             # Insert replacement text at saved rectangles
-            for rect_info in all_rects_for_occurrence:
+            if len(all_rects_for_occurrence) == 1:
+                # Single rectangle: full replacement goes here
+                rect_info = all_rects_for_occurrence[0]
                 pn = rect_info["page"]
                 r = rect_info["rect"]
                 page = doc[pn - 1]
                 cover = fitz.Rect(r[0], r[1], r[2], r[3])
 
-                # Determine the replacement portion for this rect
-                # Find chars that belong to this page+rect
-                rect_chars = [
-                    cr for cr in char_rects
-                    if cr["page"] == pn
-                    and abs(cr["rect"][0] - r[0]) < 1
-                    and abs(cr["rect"][1] - r[1]) < 1
-                ]
-                if rect_chars:
-                    first_idx = char_rects.index(rect_chars[0])
-                    last_idx = char_rects.index(rect_chars[-1])
-                    r_start = first_idx - local_start
-                    r_end = last_idx - local_start + 1
-                    rect_replacement = replacement[r_start:r_end]
-                else:
-                    rect_replacement = replacement
-
-                fontsize = max(4, min(10, cover.height * 0.75))
+                rect_width = cover.width
+                rect_height = cover.height
+                cjk_count = sum(1 for c in replacement if ord(c) > 0x2E80)
+                latin_count = len(replacement) - cjk_count
+                est_char_width_ratio = (cjk_count + latin_count * 0.5) / max(1, len(replacement))
+                fontsize = rect_height * 0.75
+                if len(replacement) > 0:
+                    est_text_width = fontsize * est_char_width_ratio * len(replacement)
+                    if est_text_width > rect_width * 0.95:
+                        fontsize = (rect_width * 0.95) / (est_char_width_ratio * len(replacement))
+                fontsize = max(4, min(fontsize, rect_height * 0.85))
                 page.insert_text(
-                    (cover.x0, cover.y1 - 2),
-                    rect_replacement,
+                    (cover.x0, cover.y1 - fontsize * 0.2),
+                    replacement,
                     fontname="china-s",
                     fontsize=fontsize,
                     color=(0, 0, 0),
                 )
+            else:
+                # Multiple rectangles (cross-line): split replacement proportionally
+                for rect_info in all_rects_for_occurrence:
+                    pn = rect_info["page"]
+                    r = rect_info["rect"]
+                    page = doc[pn - 1]
+                    cover = fitz.Rect(r[0], r[1], r[2], r[3])
+
+                    # Find chars on this page to determine replacement portion
+                    page_chars_in_rect = [i for i, cr in enumerate(char_rects) if cr["page"] == pn]
+                    if not page_chars_in_rect:
+                        continue
+                    r_start = page_chars_in_rect[0]
+                    r_end = page_chars_in_rect[-1] + 1
+                    rect_replacement = replacement[r_start:r_end]
+
+                    rect_width = cover.width
+                    rect_height = cover.height
+                    cjk_count = sum(1 for c in rect_replacement if ord(c) > 0x2E80)
+                    latin_count = len(rect_replacement) - cjk_count
+                    est_char_width_ratio = (cjk_count + latin_count * 0.5) / max(1, len(rect_replacement))
+                    fontsize = rect_height * 0.75
+                    if len(rect_replacement) > 0:
+                        est_text_width = fontsize * est_char_width_ratio * len(rect_replacement)
+                        if est_text_width > rect_width * 0.95:
+                            fontsize = (rect_width * 0.95) / (est_char_width_ratio * len(rect_replacement))
+                    fontsize = max(4, min(fontsize, rect_height * 0.85))
+                    page.insert_text(
+                        (cover.x0, cover.y1 - fontsize * 0.2),
+                        rect_replacement,
+                        fontname="china-s",
+                        fontsize=fontsize,
+                        color=(0, 0, 0),
+                    )
 
             # Record entity, occurrence, applied
             result.entities.append({
@@ -526,13 +576,14 @@ def apply_decisions_pdf(
         doc.close()
 
     # Residual verification: check target rectangles, NOT global search
-    _verify_pdf_residual(output_path, result, blocks_by_id)
+    audit_flags = _verify_pdf_residual(output_path, result, blocks_by_id)
 
     source_sha = hashlib.sha256(Path(source_path).read_bytes()).hexdigest()
     return {
         "schema_version": "1.0", "source_file": Path(source_path).name,
         "redacted_file": Path(output_path).name, "source_sha256": source_sha,
         "entities": result.entities, "occurrences": result.occurrences,
+        "audit_flags": audit_flags,
     }, result
 
 
@@ -540,15 +591,20 @@ def _verify_pdf_residual(
     output_path: str,
     result: DecisionApplicationResult,
     blocks_by_id: dict,
-) -> None:
-    """Verify that redacted text cannot be extracted from target rectangles.
+) -> dict:
+    """Verify redacted text removed, replacement written, and positions correct.
+
+    Returns audit flags dict:
+      { original_removed: bool, replacement_written: bool, position_verification: bool }
 
     Uses charMap-based rect verification, NOT global text search.
     """
     try:
         import fitz
     except ImportError:
-        return  # Can't verify without fitz
+        return {"original_removed": False, "replacement_written": False, "position_verification": False, "error": "PyMuPDF not available"}
+
+    flags = {"original_removed": True, "replacement_written": True, "position_verification": True}
 
     doc = fitz.open(output_path)
     try:
@@ -556,34 +612,81 @@ def _verify_pdf_residual(
             entity_id = applied.get("entity_id")
             entity = next((e for e in result.entities if e["id"] == entity_id), None)
             if not entity:
+                flags["position_verification"] = False
                 continue
 
             original = entity.get("original", "")
+            replacement = entity.get("replacement", "")
             if not original or len(original) < 2:
                 continue
 
             rectangles = applied.get("rectangles", [])
             if not rectangles:
+                flags["position_verification"] = False
                 continue
 
-            # Check that the original text cannot be extracted from the target rectangles
+            # Collect all pages involved
+            involved_pages = set()
+            for rect_info in rectangles:
+                pn = rect_info.get("page", 0)
+                if 1 <= pn <= len(doc):
+                    involved_pages.add(pn)
+
+            # 1. Original must NOT be extractable from target rectangles
             for rect_info in rectangles:
                 pn = rect_info.get("page", 0)
                 r = rect_info.get("rect", [])
                 if pn < 1 or pn > len(doc) or len(r) != 4:
+                    flags["position_verification"] = False
                     continue
 
                 page = doc[pn - 1]
                 rect = fitz.Rect(r[0], r[1], r[2], r[3])
-                # Extract text from the specific rectangle area
                 area_text = page.get_text("text", clip=rect).strip()
+
                 if original in area_text:
-                    raise RuntimeError(
-                        f"Residual verification failed: original '{original[:20]}' "
-                        f"still extractable from rect on page {pn}"
-                    )
+                    flags["original_removed"] = False
+
+            # 2. Replacement text verification: check page-level text
+            # (rect-level extraction may not capture inserted text due to font rendering)
+            if replacement and len(replacement) >= 2:
+                rep_found = False
+                for pn in involved_pages:
+                    page_text = doc[pn - 1].get_text()
+                    if replacement in page_text:
+                        rep_found = True
+                        break
+                    # Also check partial match for masked text (e.g., "138****8000")
+                    # Check if at least the mask chars are present
+                    mask_chars = replacement.replace("*", "").replace("●", "")
+                    if len(mask_chars) >= 2 and mask_chars in page_text:
+                        rep_found = True
+                        break
+                if not rep_found:
+                    # If replacement is all mask chars, check that area is non-empty
+                    # (the text was written but may not be extractable as exact string)
+                    all_mask = all(c in "*●" for c in replacement)
+                    if all_mask:
+                        # Check that the target area has some content
+                        any_content = False
+                        for rect_info in rectangles:
+                            pn = rect_info.get("page", 0)
+                            r = rect_info.get("rect", [])
+                            if pn < 1 or pn > len(doc) or len(r) != 4:
+                                continue
+                            area_text = doc[pn - 1].get_text("text", clip=fitz.Rect(r[0], r[1], r[2], r[3])).strip()
+                            if area_text:
+                                any_content = True
+                                break
+                        if not any_content:
+                            flags["replacement_written"] = False
+                    else:
+                        flags["replacement_written"] = False
+
     finally:
         doc.close()
+
+    return flags
 
 
 # ---------------------------------------------------------------------------

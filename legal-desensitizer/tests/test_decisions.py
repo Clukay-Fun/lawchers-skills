@@ -1029,7 +1029,7 @@ class TestPDFDecisions:
         assert audit["summary"]["redact_applied"] == redact_count
         assert audit["summary"]["total_entities"] == redact_count
         assert audit["summary"]["total_occurrences"] == redact_count
-        assert audit["residual_scan"]["method"] == "applied_position_verification"
+        assert audit["residual_scan"]["method"] == "rect_based_extraction"
 
     # -- Test 6: Redacted original not extractable, kept text still present --
     def test_redacted_not_extractable_kept_present(self, tmp_path):
@@ -1087,7 +1087,7 @@ class TestPDFDecisions:
         rc, stderr, audit, _, _ = _run_pdf_decisions(pdf, dp, smp, tmp_path)
         assert rc == 0, f"export failed: {stderr}"
         assert audit["residual_scan"]["passed"] is True
-        assert audit["residual_scan"]["method"] == "applied_position_verification"
+        assert audit["residual_scan"]["method"] == "rect_based_extraction"
 
     # -- Test 8: SHA change after prepare → reject export --
     def test_sha_change_rejects_export(self, tmp_path):

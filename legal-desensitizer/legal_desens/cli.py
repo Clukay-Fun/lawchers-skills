@@ -287,21 +287,49 @@ def _apply_decisions(args: argparse.Namespace, fmt: str, decisions_file: str) ->
 
     # Write audit
     if args.audit:
-        audit_data = {
-            "schema_version": "1.0",
-            "summary": {
-                "total_entities": len(map_data.get("entities", [])),
-                "total_occurrences": len(map_data.get("occurrences", [])),
-                "redact_requested": app_result.redact_requested,
-                "redact_applied": app_result.redact_applied,
-            },
-            "residual_scan": {
-                "passed": residual_passed,
-                "findings": residual_findings,
-                "method": "applied_position_verification",
-            },
-            "export_mode": "decisions",
-        }
+        # Determine residual verification flags
+        if fmt == "irreversible" and ext == ".pdf":
+            # PDF uses rect-based verification with three flags
+            pdf_audit_flags = map_data.get("audit_flags", {})
+            original_removed = pdf_audit_flags.get("original_removed", False)
+            replacement_written = pdf_audit_flags.get("replacement_written", False)
+            position_verification = pdf_audit_flags.get("position_verification", False)
+            four_way_ok = len(residual_findings) == 0
+            residual_passed = original_removed and replacement_written and position_verification and four_way_ok
+            audit_data = {
+                "schema_version": "1.0",
+                "summary": {
+                    "total_entities": len(map_data.get("entities", [])),
+                    "total_occurrences": len(map_data.get("occurrences", [])),
+                    "redact_requested": app_result.redact_requested,
+                    "redact_applied": app_result.redact_applied,
+                },
+                "residual_scan": {
+                    "original_removed": original_removed and four_way_ok,
+                    "replacement_written": replacement_written,
+                    "position_verification": position_verification and four_way_ok,
+                    "passed": residual_passed,
+                    "findings": residual_findings,
+                    "method": "rect_based_extraction",
+                },
+                "export_mode": "decisions",
+            }
+        else:
+            audit_data = {
+                "schema_version": "1.0",
+                "summary": {
+                    "total_entities": len(map_data.get("entities", [])),
+                    "total_occurrences": len(map_data.get("occurrences", [])),
+                    "redact_requested": app_result.redact_requested,
+                    "redact_applied": app_result.redact_applied,
+                },
+                "residual_scan": {
+                    "passed": residual_passed,
+                    "findings": residual_findings,
+                    "method": "applied_position_verification",
+                },
+                "export_mode": "decisions",
+            }
         with open(args.audit, "w", encoding="utf-8") as f:
             json.dump(audit_data, f, ensure_ascii=False, indent=2)
 
@@ -1029,13 +1057,344 @@ def _cmd_ner_spans(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_render_pages(args: argparse.Namespace) -> int:
+    """Render PDF pages to images with coordinate metadata.
+
+    Outputs a manifest JSON with per-page info:
+      - pageNumber (1-indexed)
+      - imagePath (relative to output dir)
+      - imageWidth, imageHeight (pixels at render DPI)
+      - pageWidth, pageHeight (PDF points, 1 pt = 1/72 inch)
+      - dpi (render resolution)
+
+    Coordinate contract (shared with workbench):
+      - Page coordinates: PDF point, origin = top-left (fitz convention)
+      - Render coordinates: image pixels at `dpi`, origin = top-left
+      - page-normalized: (x/pageWidth, y/pageHeight) ∈ [0,1]
+    """
+    from .adapters.pdf_adapter import render_pdf_pages
+
+    input_path = args.input
+    dpi = getattr(args, "dpi", 200)
+    output_dir = getattr(args, "out_dir", None)
+
+    try:
+        result = render_pdf_pages(input_path, dpi=dpi, output_dir=output_dir)
+    except (FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    # Build manifest with page dimensions
+    import fitz
+    doc = fitz.open(input_path)
+    pages = []
+    try:
+        for i, img in enumerate(result.page_images):
+            page = doc[i]
+            pw = page.rect.width
+            ph = page.rect.height
+            pages.append({
+                "pageNumber": img.page_number,
+                "imagePath": img.image_path,
+                "imageWidth": img.width,
+                "imageHeight": img.height,
+                "pageWidth": round(pw, 2),
+                "pageHeight": round(ph, 2),
+                "dpi": dpi,
+            })
+    finally:
+        doc.close()
+
+    manifest = {
+        "sourceFile": str(Path(input_path).name),
+        "totalPages": result.total_pages,
+        "dpi": dpi,
+        "pages": pages,
+    }
+
+    out_file = getattr(args, "out", None)
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        print(f"Render manifest: {out_file}", file=sys.stderr)
+    else:
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+
+    print(
+        f"Render complete: {result.total_pages} pages @ {dpi} DPI",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    """OCR a PDF and output normalized text boxes per page.
+
+    Output JSON format:
+    {
+      "ocrBoxes": [
+        { "text": "...", "page": 1, "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.02, "confidence": 0.95 }
+      ],
+      "manifest": { ... page metadata ... }
+    }
+    """
+    from .mask_export import ocr_pages_to_normalized_boxes
+
+    try:
+        ocr_boxes, manifest = ocr_pages_to_normalized_boxes(
+            args.input,
+            dpi=getattr(args, "dpi", 200),
+            confidence_threshold=getattr(args, "confidence", 0.7),
+            rules_path=getattr(args, "rules", None),
+        )
+    except (FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    output = {
+        "ocrBoxes": [
+            {
+                "text": box.text,
+                "page": box.page,
+                "x": round(box.x, 6),
+                "y": round(box.y, 6),
+                "width": round(box.width, 6),
+                "height": round(box.height, 6),
+                "confidence": round(box.confidence, 4),
+                "entityType": box.entity_type,
+            }
+            for box in ocr_boxes
+        ],
+        "manifest": manifest,
+    }
+
+    out_file = getattr(args, "out", None)
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+        print(f"Analyze output: {out_file}", file=sys.stderr)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+
+    print(
+        f"Analyze complete: {len(ocr_boxes)} text boxes across {manifest['totalPages']} pages",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_mask_export(args: argparse.Namespace) -> int:
+    """Export a masked PDF with black rectangles over specified regions.
+
+    Reads boxes JSON (page-normalized coordinates) and produces a masked PDF.
+    Fail-closed: on failure, output is deleted.
+    """
+    from .mask_export import MaskBox, mask_export
+
+    boxes_path = args.boxes
+    try:
+        with open(boxes_path, "r", encoding="utf-8") as f:
+            boxes_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading boxes: {e}", file=sys.stderr)
+        return 1
+
+    boxes = []
+    for b in boxes_data:
+        boxes.append(MaskBox(
+            id=b.get("id", f"box_{len(boxes)}"),
+            page=b["page"],
+            x=b["x"],
+            y=b["y"],
+            width=b["width"],
+            height=b["height"],
+            source=b.get("source", "manual"),
+            entity_type=b.get("entityType"),
+        ))
+
+    doc_kind = getattr(args, "document_kind", "pdf-text")
+    dpi = getattr(args, "dpi", 200)
+    rules_path = getattr(args, "rules", None)
+    denylist_path = getattr(args, "denylist", None)
+
+    # Load denylist if provided
+    denylist = None
+    if denylist_path:
+        try:
+            with open(denylist_path, "r", encoding="utf-8") as f:
+                denylist = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"Error: denylist file not found: {denylist_path}", file=sys.stderr)
+            return 1
+
+    try:
+        result = mask_export(
+            source_path=args.input,
+            output_path=args.out,
+            boxes=boxes,
+            document_kind=doc_kind,
+            dpi=dpi,
+            rules_path=rules_path,
+            denylist=denylist,
+        )
+    except (RuntimeError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    audit_file = getattr(args, "audit", None)
+    if audit_file:
+        audit = {
+            "schema_version": "1.0",
+            "pipeline": result.audit.get("pipeline"),
+            "verification": result.audit,
+            "summary": {
+                "total_pages": result.total_pages,
+                "boxes_applied": result.boxes_applied,
+            },
+            "source_sha256": result.source_sha256,
+            "output_sha256": result.output_sha256,
+        }
+        with open(audit_file, "w", encoding="utf-8") as f:
+            json.dump(audit, f, ensure_ascii=False, indent=2)
+        print(f"Audit: {audit_file}", file=sys.stderr)
+
+    print(
+        f"Mask export complete: {result.boxes_applied} boxes on {result.total_pages} pages",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_detect_seals(args: argparse.Namespace) -> int:
+    """Detect red seals/stamps in PDF pages (best-effort).
+
+    Output JSON: { "seals": [...], "manifest": {...} }
+    Each seal: { "page", "x", "y", "width", "height", "confidence", "area_ratio" }
+    All coordinates are page-normalized [0,1].
+    """
+    from .seal_detect import detect_seals_in_pdf
+
+    try:
+        seals, manifest = detect_seals_in_pdf(
+            args.input,
+            dpi=getattr(args, "dpi", 200),
+            min_circularity=getattr(args, "min_circularity", 0.4),
+        )
+    except (FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    output = {
+        "seals": [
+            {
+                "page": s.page,
+                "x": s.x,
+                "y": s.y,
+                "width": s.width,
+                "height": s.height,
+                "confidence": s.confidence,
+                "area_ratio": s.area_ratio,
+                "source": "seal",
+            }
+            for s in seals
+        ],
+        "manifest": manifest,
+    }
+
+    out_file = getattr(args, "out", None)
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+        print(f"Seal detection output: {out_file}", file=sys.stderr)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+
+    print(
+        f"Seal detection complete: {len(seals)} seals across {manifest['totalPages']} pages (best-effort)",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_text_export(args: argparse.Namespace) -> int:
+    """Export text with star/placeholder replacement.
+
+    Reads entities JSON and applies type-aware masking.
+    Supports TXT, MD, DOCX output formats.
+    PDF sources → export as TXT/MD/DOCX (no PDF write-back).
+    """
+    from .text_replace import text_export
+
+    entities_path = args.entities
+    try:
+        with open(entities_path, "r", encoding="utf-8") as f:
+            entities = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading entities: {e}", file=sys.stderr)
+        return 1
+
+    # Load OCR text if provided
+    ocr_text = None
+    ocr_text_path = getattr(args, "ocr_text", None)
+    if ocr_text_path:
+        try:
+            ocr_text = Path(ocr_text_path).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            print(f"Error: OCR text file not found: {ocr_text_path}", file=sys.stderr)
+            return 1
+
+    # Load rules/denylist/whitelist if provided
+    rules_path = getattr(args, "rules", None)
+    denylist_path = getattr(args, "denylist", None)
+    whitelist_path = getattr(args, "whitelist", None)
+
+    denylist = None
+    if denylist_path:
+        try:
+            with open(denylist_path, "r", encoding="utf-8") as f:
+                denylist = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"Error: denylist file not found: {denylist_path}", file=sys.stderr)
+            return 1
+
+    whitelist = None
+    if whitelist_path:
+        try:
+            with open(whitelist_path, "r", encoding="utf-8") as f:
+                whitelist = [line.strip() for line in f if line.strip()]
+        except FileNotFoundError:
+            print(f"Error: whitelist file not found: {whitelist_path}", file=sys.stderr)
+            return 1
+
+    try:
+        result = text_export(
+            source_path=args.input,
+            output_path=args.out,
+            entities=entities,
+            mode=args.mode,
+            export_format=args.export_format,
+            ocr_text=ocr_text,
+            rules_path=rules_path,
+            denylist=denylist,
+            whitelist=whitelist,
+        )
+    except (RuntimeError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    print(
+        f"Text export complete: {result['replacements_applied']} replacements, "
+        f"format={result['format']}",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_paths(args: argparse.Namespace) -> int:
     """Output installed resource paths as JSON."""
-    import importlib.resources as pkg_resources
+    from .rules import _default_rules_path
 
-    # Locate rules.json inside the installed package
-    rules_ref = pkg_resources.files("legal_desens").joinpath("rules").joinpath("rules.json")
-    rules_path = str(rules_ref)
+    rules_path = str(_default_rules_path())
 
     if args.json or True:
         output = {"rules": rules_path}
@@ -1222,6 +1581,93 @@ def main(argv=None):
     p_prepare.add_argument("--map", default=None,
                             help="Output source map JSON file")
 
+    # ── render-pages ──
+    p_render = sub.add_parser(
+        "render-pages",
+        help="Render PDF pages to images with coordinate metadata for visual redaction",
+    )
+    p_render.add_argument("input", help="Input PDF file")
+    p_render.add_argument("--dpi", type=int, default=200,
+                          help="Render DPI (default: 200)")
+    p_render.add_argument("--out-dir", default=None,
+                          help="Output directory for page images")
+    p_render.add_argument("--out", default=None,
+                          help="Output manifest JSON file")
+
+    # ── analyze ──
+    p_analyze = sub.add_parser(
+        "analyze",
+        help="OCR a PDF and output normalized text boxes per page",
+    )
+    p_analyze.add_argument("input", help="Input PDF file")
+    p_analyze.add_argument("--dpi", type=int, default=200,
+                           help="Render DPI (default: 200)")
+    p_analyze.add_argument("--confidence", type=float, default=0.7,
+                           help="OCR confidence threshold (default: 0.7)")
+    p_analyze.add_argument("--rules", default=None,
+                           help="Path to rules JSON for entity type tagging")
+    p_analyze.add_argument("--out", default=None,
+                           help="Output JSON file")
+
+    # ── mask-export ──
+    p_mask = sub.add_parser(
+        "mask-export",
+        help="Export a masked PDF with black rectangles over specified regions",
+    )
+    p_mask.add_argument("input", help="Input PDF file")
+    p_mask.add_argument("--boxes", required=True,
+                        help="Path to boxes JSON (page-normalized coordinates)")
+    p_mask.add_argument("--out", required=True,
+                        help="Output masked PDF file")
+    p_mask.add_argument("--document-kind", default="pdf-text",
+                        choices=["pdf-text", "pdf-scan", "pdf-hybrid"],
+                        help="Document kind (default: pdf-text)")
+    p_mask.add_argument("--dpi", type=int, default=200,
+                        help="Render DPI for scan pipeline (default: 200)")
+    p_mask.add_argument("--audit", default=None,
+                        help="Output audit JSON file")
+    p_mask.add_argument("--rules", default=None,
+                        help="Path to merged rules JSON file")
+    p_mask.add_argument("--denylist", default=None,
+                        help="Path to denylist file (one term per line)")
+
+    # ── detect-seals ──
+    p_seal = sub.add_parser(
+        "detect-seals",
+        help="Detect red seals/stamps in PDF pages (best-effort)",
+    )
+    p_seal.add_argument("input", help="Input PDF file")
+    p_seal.add_argument("--dpi", type=int, default=200,
+                        help="Render DPI (default: 200)")
+    p_seal.add_argument("--min-circularity", type=float, default=0.4,
+                        help="Minimum circularity score (default: 0.4)")
+    p_seal.add_argument("--out", default=None,
+                        help="Output JSON file")
+
+    # ── text-export ──
+    p_text = sub.add_parser(
+        "text-export",
+        help="Export text with star/placeholder replacement (TXT/MD/DOCX)",
+    )
+    p_text.add_argument("input", help="Input file (PDF, DOCX, TXT, MD)")
+    p_text.add_argument("--entities", required=True,
+                        help="Path to entities JSON (from analyze/prepare)")
+    p_text.add_argument("--out", required=True,
+                        help="Output file path")
+    p_text.add_argument("--mode", required=True, choices=["star", "placeholder"],
+                        help="Replacement mode")
+    p_text.add_argument("--format", required=True, choices=["txt", "md", "docx"],
+                        dest="export_format",
+                        help="Export format")
+    p_text.add_argument("--ocr-text", default=None,
+                        help="Path to OCR text file (for PDF sources)")
+    p_text.add_argument("--rules", default=None,
+                        help="Path to rules JSON file")
+    p_text.add_argument("--denylist", default=None,
+                        help="Path to denylist file (one term per line)")
+    p_text.add_argument("--whitelist", default=None,
+                        help="Path to whitelist file (one term per line)")
+
     # ── paths ──
     p_paths = sub.add_parser(
         "paths",
@@ -1248,6 +1694,11 @@ def main(argv=None):
         "batch-redact-case": _cmd_batch_redact_case,
         "prepare": _cmd_prepare,
         "paths": _cmd_paths,
+        "render-pages": _cmd_render_pages,
+        "analyze": _cmd_analyze,
+        "mask-export": _cmd_mask_export,
+        "detect-seals": _cmd_detect_seals,
+        "text-export": _cmd_text_export,
     }
 
     handler = handlers.get(args.command)
