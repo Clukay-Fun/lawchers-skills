@@ -1253,6 +1253,57 @@ def _cmd_mask_export(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_detect_seals(args: argparse.Namespace) -> int:
+    """Detect red seals/stamps in PDF pages (best-effort).
+
+    Output JSON: { "seals": [...], "manifest": {...} }
+    Each seal: { "page", "x", "y", "width", "height", "confidence", "area_ratio" }
+    All coordinates are page-normalized [0,1].
+    """
+    from .seal_detect import detect_seals_in_pdf
+
+    try:
+        seals, manifest = detect_seals_in_pdf(
+            args.input,
+            dpi=getattr(args, "dpi", 200),
+            min_circularity=getattr(args, "min_circularity", 0.4),
+        )
+    except (FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    output = {
+        "seals": [
+            {
+                "page": s.page,
+                "x": s.x,
+                "y": s.y,
+                "width": s.width,
+                "height": s.height,
+                "confidence": s.confidence,
+                "area_ratio": s.area_ratio,
+                "source": "seal",
+            }
+            for s in seals
+        ],
+        "manifest": manifest,
+    }
+
+    out_file = getattr(args, "out", None)
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+        print(f"Seal detection output: {out_file}", file=sys.stderr)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+
+    print(
+        f"Seal detection complete: {len(seals)} seals across {manifest['totalPages']} pages (best-effort)",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _cmd_paths(args: argparse.Namespace) -> int:
     """Output installed resource paths as JSON."""
     import importlib.resources as pkg_resources
@@ -1490,6 +1541,19 @@ def main(argv=None):
     p_mask.add_argument("--audit", default=None,
                         help="Output audit JSON file")
 
+    # ── detect-seals ──
+    p_seal = sub.add_parser(
+        "detect-seals",
+        help="Detect red seals/stamps in PDF pages (best-effort)",
+    )
+    p_seal.add_argument("input", help="Input PDF file")
+    p_seal.add_argument("--dpi", type=int, default=200,
+                        help="Render DPI (default: 200)")
+    p_seal.add_argument("--min-circularity", type=float, default=0.4,
+                        help="Minimum circularity score (default: 0.4)")
+    p_seal.add_argument("--out", default=None,
+                        help="Output JSON file")
+
     # ── paths ──
     p_paths = sub.add_parser(
         "paths",
@@ -1519,6 +1583,7 @@ def main(argv=None):
         "render-pages": _cmd_render_pages,
         "analyze": _cmd_analyze,
         "mask-export": _cmd_mask_export,
+        "detect-seals": _cmd_detect_seals,
     }
 
     handler = handlers.get(args.command)
