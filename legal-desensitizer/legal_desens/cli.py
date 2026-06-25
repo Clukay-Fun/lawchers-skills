@@ -1091,8 +1091,6 @@ def _cmd_render_pages(args: argparse.Namespace) -> int:
     try:
         for i, img in enumerate(result.page_images):
             page = doc[i]
-            # fitz page.rect gives PDF points (width, height)
-            # Origin is top-left in fitz coordinate space
             pw = page.rect.width
             ph = page.rect.height
             pages.append({
@@ -1123,7 +1121,133 @@ def _cmd_render_pages(args: argparse.Namespace) -> int:
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
 
     print(
-        f"Render complete: {result.total_pages} pages @ {result.total_pages} DPI",
+        f"Render complete: {result.total_pages} pages @ {dpi} DPI",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    """OCR a PDF and output normalized text boxes per page.
+
+    Output JSON format:
+    {
+      "ocrBoxes": [
+        { "text": "...", "page": 1, "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.02, "confidence": 0.95 }
+      ],
+      "manifest": { ... page metadata ... }
+    }
+    """
+    from .mask_export import ocr_pages_to_normalized_boxes
+
+    try:
+        ocr_boxes, manifest = ocr_pages_to_normalized_boxes(
+            args.input,
+            dpi=getattr(args, "dpi", 200),
+            confidence_threshold=getattr(args, "confidence", 0.7),
+        )
+    except (FileNotFoundError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    output = {
+        "ocrBoxes": [
+            {
+                "text": box.text,
+                "page": box.page,
+                "x": round(box.x, 6),
+                "y": round(box.y, 6),
+                "width": round(box.width, 6),
+                "height": round(box.height, 6),
+                "confidence": round(box.confidence, 4),
+            }
+            for box in ocr_boxes
+        ],
+        "manifest": manifest,
+    }
+
+    out_file = getattr(args, "out", None)
+    if out_file:
+        with open(out_file, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+        print(f"Analyze output: {out_file}", file=sys.stderr)
+    else:
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+
+    print(
+        f"Analyze complete: {len(ocr_boxes)} text boxes across {manifest['totalPages']} pages",
+        file=sys.stderr,
+    )
+    return 0
+
+
+def _cmd_mask_export(args: argparse.Namespace) -> int:
+    """Export a masked PDF with black rectangles over specified regions.
+
+    Reads boxes JSON (page-normalized coordinates) and produces a masked PDF.
+    Fail-closed: on failure, output is deleted.
+    """
+    from .mask_export import MaskBox, mask_export
+
+    boxes_path = args.boxes
+    try:
+        with open(boxes_path, "r", encoding="utf-8") as f:
+            boxes_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        print(f"Error loading boxes: {e}", file=sys.stderr)
+        return 1
+
+    boxes = []
+    for b in boxes_data:
+        boxes.append(MaskBox(
+            id=b.get("id", f"box_{len(boxes)}"),
+            page=b["page"],
+            x=b["x"],
+            y=b["y"],
+            width=b["width"],
+            height=b["height"],
+            source=b.get("source", "manual"),
+            entity_type=b.get("entityType"),
+        ))
+
+    if not boxes:
+        print("Error: no boxes to mask", file=sys.stderr)
+        return 1
+
+    doc_kind = getattr(args, "document_kind", "pdf-text")
+    dpi = getattr(args, "dpi", 200)
+
+    try:
+        result = mask_export(
+            source_path=args.input,
+            output_path=args.out,
+            boxes=boxes,
+            document_kind=doc_kind,
+            dpi=dpi,
+        )
+    except (RuntimeError, ValueError, ImportError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    audit_file = getattr(args, "audit", None)
+    if audit_file:
+        audit = {
+            "schema_version": "1.0",
+            "pipeline": result.audit.get("pipeline"),
+            "verification": result.audit,
+            "summary": {
+                "total_pages": result.total_pages,
+                "boxes_applied": result.boxes_applied,
+            },
+            "source_sha256": result.source_sha256,
+            "output_sha256": result.output_sha256,
+        }
+        with open(audit_file, "w", encoding="utf-8") as f:
+            json.dump(audit, f, ensure_ascii=False, indent=2)
+        print(f"Audit: {audit_file}", file=sys.stderr)
+
+    print(
+        f"Mask export complete: {result.boxes_applied} boxes on {result.total_pages} pages",
         file=sys.stderr,
     )
     return 0
@@ -1335,6 +1459,37 @@ def main(argv=None):
     p_render.add_argument("--out", default=None,
                           help="Output manifest JSON file")
 
+    # ── analyze ──
+    p_analyze = sub.add_parser(
+        "analyze",
+        help="OCR a PDF and output normalized text boxes per page",
+    )
+    p_analyze.add_argument("input", help="Input PDF file")
+    p_analyze.add_argument("--dpi", type=int, default=200,
+                           help="Render DPI (default: 200)")
+    p_analyze.add_argument("--confidence", type=float, default=0.7,
+                           help="OCR confidence threshold (default: 0.7)")
+    p_analyze.add_argument("--out", default=None,
+                           help="Output JSON file")
+
+    # ── mask-export ──
+    p_mask = sub.add_parser(
+        "mask-export",
+        help="Export a masked PDF with black rectangles over specified regions",
+    )
+    p_mask.add_argument("input", help="Input PDF file")
+    p_mask.add_argument("--boxes", required=True,
+                        help="Path to boxes JSON (page-normalized coordinates)")
+    p_mask.add_argument("--out", required=True,
+                        help="Output masked PDF file")
+    p_mask.add_argument("--document-kind", default="pdf-text",
+                        choices=["pdf-text", "pdf-scan", "pdf-hybrid"],
+                        help="Document kind (default: pdf-text)")
+    p_mask.add_argument("--dpi", type=int, default=200,
+                        help="Render DPI for scan pipeline (default: 200)")
+    p_mask.add_argument("--audit", default=None,
+                        help="Output audit JSON file")
+
     # ── paths ──
     p_paths = sub.add_parser(
         "paths",
@@ -1362,6 +1517,8 @@ def main(argv=None):
         "prepare": _cmd_prepare,
         "paths": _cmd_paths,
         "render-pages": _cmd_render_pages,
+        "analyze": _cmd_analyze,
+        "mask-export": _cmd_mask_export,
     }
 
     handler = handlers.get(args.command)
