@@ -127,7 +127,12 @@ def ocr_pages_to_normalized_boxes(
             rules = []
 
     def _tag_text(text: str) -> Optional[str]:
-        """Run rules against text and return the first matching entity type."""
+        """Run rules against text and return the best matching entity type.
+
+        Returns the highest-priority matching type, or all matching types
+        if multiple match (comma-separated).
+        """
+        matches = []
         for rule in rules:
             if not rule.get("enabled", True):
                 continue
@@ -136,10 +141,19 @@ def ocr_pages_to_normalized_boxes(
                 continue
             try:
                 if re_module.search(pattern, text):
-                    return rule.get("entity_type", "CUSTOM")
+                    matches.append({
+                        "type": rule.get("entity_type", "CUSTOM"),
+                        "priority": rule.get("priority", 0),
+                    })
             except re_module.error:
                 continue
-        return None
+
+        if not matches:
+            return None
+
+        # Return highest priority match
+        matches.sort(key=lambda m: -m["priority"])
+        return matches[0]["type"]
 
     result = render_pdf_pages(pdf_path, dpi=dpi)
     doc = fitz.open(pdf_path)
