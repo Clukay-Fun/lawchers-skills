@@ -93,7 +93,7 @@ cd legal-desensitizer
 bash scripts/install_with_model.sh
 ```
 
-只复制 `SKILL.md` 或只执行 `pip install .` 不会自动下载 360MB 模型；这种情况下仍可用 `--regex-only`，但不能启用 NER。
+只复制 `SKILL.md` 或只执行 `pip install .` 不会自动下载约 400MB 模型；这种情况下仍可用 `--regex-only`，但不能启用 NER。
 
 ---
 
@@ -178,7 +178,7 @@ LEGAL_DESENS_WHEELHOUSE=dist/wheelhouse-macos-arm64 bash scripts/install_with_mo
 2. **wheelhouse 离线安装**：快且可审计；适合同平台批量部署。
 3. **普通 `pip install .`**：最灵活；开发/调试用。
 
-不要把 360MB NER 模型塞进 wheel 或二进制。模型用 `legal-desens install-model --url ... --sha256 ...` 单独安装，便于更新、校验和替换。
+不要把约 400MB 的 NER 模型塞进 wheel 或二进制。模型用 `legal-desens install-model --url ... --sha256 ...` 单独安装，便于更新、校验和替换。
 
 ### 离线 / 免编译安装（两种分发物）
 

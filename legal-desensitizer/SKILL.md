@@ -21,9 +21,32 @@ When this skill is present but `legal-desens` or NER is not ready, do not stop a
 bash scripts/install_with_model.sh
 ```
 
-The script has the approved ModelScope model URL and SHA-256 built in. It installs the CLI, downloads the NER ONNX model, verifies SHA-256, installs the model, and runs `legal-desens ner-inspect` including self-test. Use `LEGAL_DESENS_SKIP_MODEL=1` only when the user explicitly wants regex-only.
+The script has the approved ModelScope model URL and SHA-256 built in. It installs the CLI, downloads the NER ONNX model, verifies SHA-256, installs the model, and runs `legal-desens ner-inspect` including self-test. This is an installation convenience, not a coverage guarantee. Use `LEGAL_DESENS_SKIP_MODEL=1` only when the user explicitly wants regex-only.
 
 For faster/offline installs, first build or provide a wheelhouse and set `LEGAL_DESENS_WHEELHOUSE=/path/to/wheelhouse`. Do not use a stale wheelhouse.
+
+## Capability Commitments
+
+Every supported format must fit one of these categories before an agent claims support:
+
+| Class | Formats | Promise | Restore |
+|-------|---------|---------|---------|
+| A1 reversible byte | `.txt`, `.md`, `.csv` | redacted file can restore to source-identical bytes | yes |
+| A2 reversible content | `.docx`, `.xlsx` | restored extracted content matches source extracted content | yes |
+| B irreversible original-format copy | text-layer `.pdf`, images, scanned `.pdf` | produces a redacted derivative in the same user-facing format | no |
+| C irreversible derived review material | parsed Markdown, audit/report outputs | produces review/search artifacts only | no |
+| D unsupported/experimental | `.pptx`, `.html`, legacy Office/WPS/iWork, optional second engines | no production promise until promoted into A/B/C | no |
+
+For any new format or engine, answer these six questions before adding it to the skill contract:
+
+1. Is it reversible, and if so byte-level or content-level?
+2. What locator does `map.json` store?
+3. What does audit scan?
+4. Is restore supported?
+5. On partial failure, does the CLI error, warn, skip, or quarantine output?
+6. Which CLI command should agents call?
+
+`irreversible` is a capability property (`restore_supported: false`, `best_effort: true`). Values such as `redacted-pixels` or `redacted-content` are verification modes.
 
 ## Quick Decision Table
 
@@ -53,13 +76,15 @@ The CLI supports two detection engines: **regex** (always available) and **NER**
 
 **Reliable fallback: `--regex-only`.** Structured PII (phone, ID card, email, case number, social credit code, monetary amount) is handled deterministically by regex rules. No model is needed for this fallback.
 
-**NER is optional best-effort.** When enabled, NER may detect person names, locations, organizations, and time expressions. However, NER results are **not a desensitization safety guarantee**:
+**NER is optional best-effort.** Installing or enabling NER is a recall enhancement, not a safety promise. When enabled, NER may detect person names, locations, organizations, and time expressions. However, NER results are **not a desensitization safety guarantee**:
 
 - May miss company names (e.g., "某某科技有限公司")
 - May miss address tail segments (e.g., door numbers)
 - No MONEY entity (relies on regex)
 - General-domain models, not trained on legal text
 - Audit will mark NER runs with `best_effort` notice
+
+Even when `ner-inspect` passes, never report that all company names, person names, addresses, or locations were found. Report only that the run used `regex+ner (best-effort)`.
 
 **You must follow this flow—do not skip steps or pretend NER ran:**
 
@@ -86,7 +111,7 @@ legal-desens redact input.txt --level strict --out ... --map ... --audit ...
 legal-desens redact input.txt --level strict --regex-only --out ... --map ... --audit ...
 ```
 
-**Never** omit `--regex-only` when NER has not been verified. The CLI will error clearly if you try to use NER without a valid model, but the agent must not reach that state.
+**Never** omit `--regex-only` when NER has not been verified. The CLI will error clearly if you try to use NER without a valid model, but the agent must not reach that state. If NER verification fails, report the failure and fall back to `--regex-only`; do not silently continue.
 
 For a fresh workstation, use the built-in bootstrap:
 
@@ -192,7 +217,7 @@ legal-desens redact-scan <input.png|input.pdf> \
 - Multi-page PDFs are rendered once; OCR/NER instances are reused across pages.
 - Pixel verification failures return exit code 1, still write audit/map/Markdown, and quarantine the partial artifact as `*.INCOMPLETE_DO_NOT_USE.pdf` instead of publishing the requested output name.
 - Always write Chinese Markdown with `--out`; do not use shell redirection such as `>` for final files.
-- Map marks `pipeline: scan`, `verification: irreversible`, `restore_supported: false`, `best_effort: true`
+- Map marks `pipeline: scan`, `verification: redacted-pixels`, `restore_supported: false`, `best_effort: true`, and `intermediate_markdown_file: ...`
 - **No restore possible** — this produces derivative copies only
 - Low-confidence OCR lines (< 0.7) appear as warnings in audit
 - Do not create `__pdf_pages/`, `__redacted_pages/`, or similar work folders beside the source file. If an external tool forces such a folder, create it under a temporary/work directory and delete it before reporting completion.
@@ -251,6 +276,7 @@ legal-desens parse <input.pdf> \
 - Install with `pip install legal-desens[pdf]` or `pip install legal-desens[ocr,pdf]`.
 - Text-layer PDF: `redact input.pdf --out output.redacted.pdf ...` permanently removes detected text and scans extractable PDF containers for residual originals.
 - Scanned PDF: `redact-scan input.pdf` renders each page to image → OCR → white-box redact → image-only PDF, and retains a redacted Markdown intermediate.
+- Scanned PDF output is image-only: it does not preserve the source PDF text layer, structure tree, bookmarks, form semantics, or attachments.
 - **Not reversible.** Map marks `restore_supported: false`, `best_effort: true`.
 - Missing `[pdf]` extra → CLI returns a clear error with install guidance.
 - Missing `[ocr]` extra → CLI returns a clear error (OCR is required for the pipeline).
@@ -269,10 +295,11 @@ legal-desens parse <input.pdf> \
 
 ### scanned PDF
 - `redact-scan input.pdf` directly — renders pages to images → OCR → white-box pixel redaction → image-only PDF, plus a redacted Markdown intermediate.
+- The output PDF is an image-only derivative. It preserves visual page appearance, not the source PDF text layer, structure tree, bookmarks, forms, or other semantic containers.
 - Requires both `[pdf]` and `[ocr]` extras: `pip install legal-desens[pdf,ocr]`.
 - Each page is rendered as a 200 DPI PNG, OCR'd independently, then merged into per-page Markdown sections.
 - Audit includes page-level pipeline timings and privacy-safe failure diagnostics (`entity_id`, type, polygon category; never original text).
-- Map marks `restore_supported: false`, `best_effort: true` — **not reversible**.
+- Map marks `verification: redacted-pixels`, `restore_supported: false`, `best_effort: true`, and `intermediate_markdown_file: ...` — **not reversible**.
 - Keep only final redacted Markdown and the sensitive report. Intermediate page images/OCR files belong in a temporary/work directory and must be deleted before success is reported.
 
 ## Batch Case Redaction
