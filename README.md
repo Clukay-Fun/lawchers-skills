@@ -7,6 +7,7 @@
 | 项目 | 作用 | 状态 |
 |------|------|------|
 | [`legal-desensitizer/`](legal-desensitizer/) | **通用案件材料脱敏 skill**（通用核心 + 场景 profile）：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**，图片/扫描件走不可逆 OCR；profile 控制脱/留（`labor` 默认已验证、`strict` 全脱）。可选接入[本地 CLUENER ONNX 模型](https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx)；PDF 支持为 opt-in extra | 可用（劳动场景首轮验收） |
+| [`legal-assistant/`](legal-assistant/) | **律所日常事务自动化 skill**（脚本为主、agent 辅助）：进项发票贴票入台账、销项发票入账（歧义挂起人工复核）、合同登记（草稿确认制）、扫描件七分类归档、周五汇总推送；数据中枢为飞书多维表格（经 lark-cli），Windows Task Scheduler 挂机 | v1 已交付（待 Windows 实机联调） |
 
 ## 给 AI 代理的快速入口
 
