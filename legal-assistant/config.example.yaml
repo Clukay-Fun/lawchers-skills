@@ -1,0 +1,100 @@
+# legal-assistant 配置示例。
+# 复制为 config.yaml 后按本机路径修改；config.yaml 不进 git（含真实路径与表 token）。
+# 飞书凭据不放这里：由 lark-cli 自行管理（先跑 `lark-cli config init` 和 `auth login`）。
+# 改完用 `legal-assistant doctor --config config.yaml` 逐项自检。
+
+# 本所全称（填你所的完整名称）：B1 解析销项发票时用来排除己方、识别对方=付款方（客户）
+firm_name: "XX律师事务所"
+
+paths:
+  # QQ 邮箱导出的发票 zip 丢进这里（Task Scheduler 轮询）
+  invoice_inbox: "D:/legal-assistant/发票收件箱"
+  # 分类产物（打印用），按处理日期/发票类型分层
+  invoice_output: "D:/legal-assistant/发票整理"
+  # 处理成功的 zip 归档到这里（防重触发）
+  invoice_archive: "D:/legal-assistant/发票收件箱/已处理"
+  # 销项发票 PDF 丢进这里
+  output_invoice_inbox: "D:/legal-assistant/开票收件箱"
+  # 处理成功的 PDF 归档
+  output_invoice_archive: "D:/legal-assistant/开票收件箱/已处理"
+  # 扫描件归档：待整理目录（散文件丢这里）
+  scan_inbox: "E:/AlphaBox/【事务】文件扫描件/2026"
+  # 扫描件归档：分类目标根目录（自动建七个分类子目录）。
+  # 可与 scan_inbox 相同 = 原地整理，子目录本身不会被再次归档。
+  scan_output: "E:/AlphaBox/【事务】文件扫描件/2026"
+  # journal 与状态台账所在目录
+  state_dir: "D:/legal-assistant/state"
+  journal_dir: "D:/legal-assistant/journal"
+
+lark:
+  # lark-cli 可执行文件；PATH 里有就写 lark-cli
+  bin: "lark-cli"
+  # 三张业务表所在 Base 的 token（/base/{token} 链接中提取）
+  base_token: "bascnXXXXXXXX"
+  # 身份：写表用 user 还是 bot（默认 user，需先 lark-cli auth login）
+  identity: "user"
+  tables:
+    # 发票报销台账
+    reimburse: "tblXXXXXXXX"
+    # 合同台账
+    contracts: "tblXXXXXXXX"
+    # 合同开票统计表
+    output_invoices: "tblXXXXXXXX"
+  push:
+    # 汇总推送对象的 open_id（ou_ 开头）；用 `lark-cli contact +search-user --query 你的名字` 查
+    user_id: "ou_XXXXXXXX"
+
+# 三张表的字段映射：键是程序内部名，值是飞书表里的真实字段名。
+# 字段改名只改这里，不改代码。
+fields:
+  reimburse:
+    invoice_no: "发票号码"
+    invoice_type: "发票类型"
+    amount: "金额"
+    payee: "收款方"
+    invoice_date: "开票日期"
+    # 团队成员 / 贴票时间 用户手填，程序不写
+  output_invoices:
+    invoice_no: "发票号"
+    member: "团队成员"
+    contract_no: "合同号"
+    payer: "付款方"
+    invoice_date: "开票日期"
+    amount: "发票金额"
+    # 指向合同台账的双向关联字段（link 类型）；写它即建立合同↔发票关系，
+    # 合同侧「关联发票」由飞书自动反填
+    contract_link: "合同台账"
+  contracts:
+    contract_no: "律所合同号"
+    client: "客户名称"
+    invoiced: "已开票"        # number；B1 入账时累加本次开票额
+    # B0 草稿字段 → 飞书字段名（表里改名只改这里）
+    credit_code: "信用代码/身份证"
+    amount: "合同金额"
+    sign_date: "签约日期"
+    attachment: "附件"
+
+invoice:
+  # 防处理下载到一半的 zip：其修改时间早于当前至少这么多秒才认为下载完成
+  zip_stable_seconds: 60
+
+scan:
+  # 分类关键词 → 七分类。先按文件名匹配，纯数字名再取首页文本匹配。
+  categories:
+    合同文件: ["合同", "协议", "报价函", "报价", "聘用"]
+    诉讼函件: ["律师函", "起诉状", "答辩状", "判决", "裁决", "调解书", "询问记录", "公函", "传票"]
+    证书资质: ["营业执照", "介绍信", "资质", "执业证", "证书"]
+    财务相关: ["发票", "dzfp", "收据", "账单", "基金申请"]
+    其他文件: ["法律意见", "通知", "备忘录", "审批表", "授权委托"]
+  trash_keywords: ["test", "copy", "副本", "temp", "草稿"]
+  review_dir_name: "待人工复核"
+  trash_dir_name: "临时垃圾箱"
+  # 可选：外部 OCR 命令，{file} 替换为图片/PDF 路径，命令须把识别正文打到 stdout。
+  # Windows 上接 PaddleOCR-VL，例如: "python E:/tools/ocr_first_page.py {file}"
+  # 留空 = 不做 OCR，只靠文件名 + PDF 文本层；认不出的沉淀到「待人工复核」。
+  ocr_command: ""
+
+# 定时汇总（weekly-summary 命令；推送星期/时间在 deploy/register-tasks.ps1 里设，默认周五 16:00）
+weekly:
+  # 推送时同时导出一份 xlsx 存档到该目录（留空则只推送、不落文件）
+  xlsx_output_dir: "D:/legal-assistant/汇总存档"

@@ -1,4 +1,5 @@
 # Development docs / plans (not for version control)
+.DS_Store
 docs/
 **/docs/plan/
 legal-desensitizer/tmp/
