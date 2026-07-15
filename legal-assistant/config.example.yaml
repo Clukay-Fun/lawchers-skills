@@ -3,7 +3,7 @@
 # 飞书凭据不放这里：由 lark-cli 自行管理（先跑 `lark-cli config init` 和 `auth login`）。
 # 改完用 `legal-assistant doctor --config config.yaml` 逐项自检。
 
-# 本所全称（填你所的完整名称）：B1 解析销项发票时用来排除己方、识别对方=付款方（客户）
+# 本所全称（填你所的完整名称）：解析销项发票时用来排除己方、识别对方=付款方（客户）
 firm_name: "XX律师事务所"
 
 paths:
@@ -67,8 +67,8 @@ fields:
   contracts:
     contract_no: "律所合同号"
     client: "客户名称"
-    invoiced: "已开票"        # number；B1 入账时累加本次开票额
-    # B0 草稿字段 → 飞书字段名（表里改名只改这里）
+    invoiced: "已开票"        # number；开票入账时累加本次开票额
+    # 合同登记草稿字段 → 飞书字段名（表里改名只改这里）
     credit_code: "信用代码/身份证"
     amount: "合同金额"
     sign_date: "签约日期"

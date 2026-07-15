@@ -44,17 +44,17 @@ class Config:
     scan: ScanConfig
     weekly_xlsx_dir: Optional[Path]
     source_file: Path
-    # 本所全称：B1 解析发票时用于排除己方、识别对方（付款方）
+    # 本所全称：解析销项发票时用于排除己方、识别对方（付款方）
     firm_name: str = ""
 
 
 # 必填路径键 → 用途说明（doctor 报告用）
 PATH_KEYS = {
-    "invoice_inbox": "流 A 发票 zip 收件箱",
-    "invoice_output": "流 A 分类产物目录",
-    "invoice_archive": "流 A 已处理 zip 归档",
-    "output_invoice_inbox": "B1 销项发票收件箱",
-    "output_invoice_archive": "B1 已处理归档",
+    "invoice_inbox": "发票 zip 收件箱",
+    "invoice_output": "发票分类产物目录",
+    "invoice_archive": "发票已处理 zip 归档",
+    "output_invoice_inbox": "销项发票收件箱",
+    "output_invoice_archive": "销项发票已处理归档",
     "scan_inbox": "扫描件待整理目录",
     "scan_output": "扫描件分类目标根目录",
     "state_dir": "状态台账目录",

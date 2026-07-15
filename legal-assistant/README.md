@@ -11,6 +11,7 @@
 | 操作系统 | Windows 10/11（运行机）；macOS/Linux 可开发测试 |
 | Python | 3.9+，pip ≥ 21.3 |
 | Node.js | 任意近期版本（装 lark-cli 用） |
+| lark-cli | 飞书官方 CLI，源码与文档见 https://github.com/larksuite/cli |
 | 飞书 | 一个自建应用（凭据由 lark-cli 管理，本项目不存密钥） |
 
 ## 快速开始
@@ -32,16 +33,19 @@
 ### 手动安装
 
 ```powershell
-# 1. 安装本体与 lark-cli
+# 1. 安装本体
 pip install -e ".[pdf]"
-npm i -g @larksuiteoapi/lark-cli
+
+# 2. 安装 lark-cli（飞书官方 CLI，仓库：https://github.com/larksuite/cli）
+npm i -g @larksuite/cli
+lark-cli --version          # 验证；已装过则 lark-cli update 升级到最新
 lark-cli config init && lark-cli auth login --domain base
 
-# 2. 配置并诊断
+# 3. 配置并诊断
 copy config.example.yaml config.yaml     # 填路径、base_token、表 id、推送对象
 legal-assistant doctor --config config.yaml
 
-# 3. 注册挂机任务（轮询 + 汇总推送；星期/时间自定义，周五 16:00 只是默认值）
+# 4. 注册挂机任务（轮询 + 汇总推送；星期/时间自定义，周五 16:00 只是默认值）
 powershell -ExecutionPolicy Bypass -File deploy\register-tasks.ps1 `
     -PollMinutes 10 -WeeklyDay Friday -WeeklyTime 16:00
 ```

@@ -7,12 +7,12 @@ from legal_assistant.state import Ledger, FAILED
 from conftest import make_invoice_zip
 
 ROWS = [
-    ("餐饮", "2026/07/04", "26100000000000000001", "上海常胜圆苑餐饮有限公司", 378.00),
-    ("服务", "2026/07/02", "26100000000000000002", "公诚管理咨询有限公司", 300.00),
+    ("餐饮", "2026/07/04", "26100000000000000001", "示例餐饮有限公司", 378.00),
+    ("服务", "2026/07/02", "26100000000000000002", "示例咨询服务有限公司", 300.00),
 ]
 PDFS = [
-    "260704_378.00_上海常胜圆苑餐饮有限公司.pdf",
-    "260702_300.00_公诚管理咨询有限公司.pdf",
+    "260704_378.00_示例餐饮有限公司.pdf",
+    "260702_300.00_示例咨询服务有限公司.pdf",
 ]
 
 
@@ -93,7 +93,7 @@ def test_repair_zip_name_encodings():
 
     from legal_assistant.invoices import repair_zip_name
 
-    orig = "260704_378.00_上海常胜圆苑餐饮有限公司.pdf"
+    orig = "260704_378.00_示例餐饮有限公司.pdf"
     for enc in ("utf-8", "gbk"):
         info = zipfile.ZipInfo(orig.encode(enc).decode("cp437"))
         info.flag_bits = 0  # 模拟无 UTF-8 flag 的 QQ/Windows 导出
@@ -115,12 +115,12 @@ def test_gbk_zip_full_flow(cfg, fake_lark):
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.append(QQ_HEADER)
-    ws.append(["", "餐饮", "2026/07/04", "北京市隆安（深圳）律师事务所", "TAX", "",
-               "26100000000000000009", "", "上海常胜圆苑餐饮有限公司", 356.60, 21.40, 378.00])
+    ws.append(["", "餐饮", "2026/07/04", "示例律师事务所", "TAX", "",
+               "26100000000000000009", "", "示例餐饮有限公司", 356.60, 21.40, 378.00])
     buf = io.BytesIO()
     wb.save(buf)
 
-    pdf_name = "260704_378.00_上海常胜圆苑餐饮有限公司.pdf".encode("gbk")
+    pdf_name = "260704_378.00_示例餐饮有限公司.pdf".encode("gbk")
     make_raw_zip(
         cfg.paths["invoice_inbox"] / "qq_gbk.zip",
         [("发票统计.xlsx".encode("gbk"), buf.getvalue()),
@@ -133,7 +133,7 @@ def test_gbk_zip_full_flow(cfg, fake_lark):
     # 归档文件名已还原为正确中文
     archived = list(cfg.paths["invoice_output"].rglob("餐饮/*.pdf"))
     assert len(archived) == 1
-    assert archived[0].name == "260704_378.00_上海常胜圆苑餐饮有限公司.pdf"
+    assert archived[0].name == "260704_378.00_示例餐饮有限公司.pdf"
 
 
 def test_fresh_zip_waits_for_stability(cfg, fake_lark, tmp_path):
