@@ -4,7 +4,7 @@ This project is a law-office daily-ops automation CLI + skill (inside the `lawch
 
 ## Core Direction
 
-- **Scripts do the work; the agent assists**: the `legal-assistant` CLI is the sole capability core, invoked headless by Windows Task Scheduler; the agent only handles fuzzy steps (B0 confirmation, B1 review), exceptions, and ad-hoc requests.
+- **Scripts do the work; the agent assists**: the `legal-assistant` CLI is the sole capability core, invoked headless by Windows Task Scheduler; the agent only handles fuzzy steps (contract-registration confirmation, outbound-invoice review), exceptions, and ad-hoc requests.
 - All Feishu access goes through **lark-cli** shortcuts (`base +record-*` / `im +messages-send`); the adapter is `scripts/lark.py`. No hand-rolled HTTP clients, no credential management in this repo.
 - Plan file: `docs/plan/001-v1-scope.md` (SSOT for v1 scope and slice breakdown).
 - The Python code lives flat in `scripts/`, mapped to the `legal_assistant` package (see `pyproject.toml` package-dir).
@@ -12,25 +12,25 @@ This project is a law-office daily-ops automation CLI + skill (inside the `lawch
 ## CLI Capabilities (as of 001)
 
 - `legal-assistant doctor` — config / paths / lark-cli / dependency diagnostics
-- `legal-assistant invoice-once` — Flow A: invoice zip → parse/classify/write ledger/archive (invoice-number idempotent)
+- `legal-assistant invoice-once` — inbound filing: invoice zip → parse/classify/write ledger/archive (invoice-number idempotent)
 - `legal-assistant scan-once` — 7-category scan archiving (lock detection / no-overwrite / review fallback)
 - `legal-assistant weekly-summary` — aggregate two tables into a cumulative snapshot → Feishu DM push (+ optional xlsx)
-- `legal-assistant output-invoice-once` — B1: outbound invoice PDF → unique contract match → write + write-back; ambiguity pends
-- `legal-assistant pending / resolve` — B1 manual review protocol
-- `legal-assistant contract-draft / contract-commit` — B0 contract registration (nothing lands before confirmation)
+- `legal-assistant output-invoice-once` — outbound booking: outbound invoice PDF → unique contract match → write + write-back; ambiguity pends
+- `legal-assistant pending / resolve` — outbound-invoice manual review protocol
+- `legal-assistant contract-draft / contract-commit` — contract registration (nothing lands before confirmation)
 - `legal-assistant journal` — recent operation log (agent memory)
 
 ## Key Invariants (read before changing code)
 
-1. **Idempotency keys**: Flow A = invoice number (remote set + local ledger, double dedup); B1 = invoice number; B0 = contract number. Duplicates are rejected, never silently overwritten.
-2. **When uncertain, don't write**: B1 non-unique contract match, missing OCR fields, or suspected remote duplicate → `pending_review`, waiting for an explicit `resolve`.
-3. **Write-back shares the main record's fate**: if the B1 main record is written but the contract-ledger write-back fails → `pending_review` (with `main_record_written`/`main_record_id`), PDF is not archived; a `resolve` retry only redoes the write-back and never duplicates the main record. `resolve` has identical semantics to the automatic path (main record + write-back + archive).
-4. **dry-run contract**: `--dry-run` performs no Feishu writes and no file moves; reads are allowed (offline, Flow A dedup degrades to an empty set and notes it in the journal).
+1. **Idempotency keys**: inbound filing = invoice number (remote set + local ledger, double dedup); outbound booking = invoice number; contract registration = contract number. Duplicates are rejected, never silently overwritten.
+2. **When uncertain, don't write**: outbound-booking non-unique contract match, missing OCR fields, or suspected remote duplicate → `pending_review`, waiting for an explicit `resolve`.
+3. **Write-back shares the main record's fate**: if the outbound-invoice main record is written but the contract-ledger write-back fails → `pending_review` (with `main_record_written`/`main_record_id`), PDF is not archived; a `resolve` retry only redoes the write-back and never duplicates the main record. `resolve` has identical semantics to the automatic path (main record + write-back + archive).
+4. **dry-run contract**: `--dry-run` performs no Feishu writes and no file moves; reads are allowed (offline, inbound-filing dedup degrades to an empty set and notes it in the journal).
 5. **File safety**: lock check before moving (locked → `skipped_locked`, retried next round); name collisions get `_1/_2` suffixes, never overwrite.
-6. **Field mapping lives in config**: all field names for the three tables come from `config.yaml fields.*`; zero hard-coding. B0 draft keys are translated through `DRAFT_KEY_MAP` + config before writing.
+6. **Field mapping lives in config**: all field names for the three tables come from `config.yaml fields.*`; zero hard-coding. Contract-registration draft keys are translated through `DRAFT_KEY_MAP` + config before writing.
 7. **Journal everything**: every business action appends to `journal/YYYY-MM-DD.md`; never log full ID numbers or contact details.
 
-## Invoice PDF Parsing (B1) Notes
+## Invoice PDF Parsing Notes
 
 Real e-invoice text layers use a "labels first, values later in order" separated layout (see `tests/test_contracts.py::REAL_LAYOUT_TEXT`). Parsing anchors:
 

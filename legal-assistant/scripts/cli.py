@@ -67,7 +67,7 @@ def cmd_doctor(args) -> int:
         import fitz  # noqa: F401
         print("✓ pymupdf：可用（PDF 文本层提取）")
     except ImportError:
-        print("• pymupdf 未安装：扫描件只能按文件名分类，B1 全部转人工。安装：pip install legal-assistant[pdf]")
+        print("• pymupdf 未安装：扫描件只能按文件名分类，销项发票入账全部转人工。安装：pip install legal-assistant[pdf]")
 
     if cfg.scan.ocr_command:
         print(f"✓ OCR hook：{cfg.scan.ocr_command}")
@@ -218,13 +218,13 @@ def main(argv=None) -> int:
         return p
 
     add("doctor", cmd_doctor, "诊断配置/路径/lark-cli/依赖", dry_run=False)
-    add("invoice-once", cmd_invoice_once, "流 A：处理发票收件箱中的 zip")
+    add("invoice-once", cmd_invoice_once, "处理发票收件箱中的 zip（贴票入台账）")
     add("scan-once", cmd_scan_once, "扫描件归档一轮")
     add("weekly-summary", cmd_weekly_summary, "定时汇总：聚合两表推送（调度时间在 register-tasks.ps1 自定义，默认周五 16:00）")
-    add("output-invoice-once", cmd_output_invoice_once, "B1：处理开票收件箱中的销项发票")
-    add("pending", cmd_pending, "列出 B1 挂起待人工复核项", dry_run=False)
+    add("output-invoice-once", cmd_output_invoice_once, "处理开票收件箱中的销项发票（开票入账）")
+    add("pending", cmd_pending, "列出挂起待人工复核的开票项", dry_run=False)
 
-    p = add("resolve", cmd_resolve, "人工复核：显式补全后完成 B1 挂起项写入", dry_run=False)
+    p = add("resolve", cmd_resolve, "人工复核：显式补全后完成挂起开票项写入", dry_run=False)
     p.add_argument("key", help="挂起项键（PDF 文件名，见 pending 输出）")
     p.add_argument("--contract-no", required=True, help="确认的律所合同号")
     p.add_argument("--member", help="团队成员")
@@ -233,10 +233,10 @@ def main(argv=None) -> int:
     p.add_argument("--payer", help="补正付款方")
     p.add_argument("--date", help="补正开票日期 YYYY/MM/DD")
 
-    p = add("contract-draft", cmd_contract_draft, "B0：从合同 PDF 生成字段草稿", dry_run=False)
+    p = add("contract-draft", cmd_contract_draft, "从合同 PDF 生成字段草稿（合同登记第一步）", dry_run=False)
     p.add_argument("pdf", help="合同 PDF 路径")
 
-    p = add("contract-commit", cmd_contract_commit, "B0：确认后的草稿写入合同台账")
+    p = add("contract-commit", cmd_contract_commit, "确认后的草稿写入合同台账（合同登记）")
     p.add_argument("--draft", required=True, help="草稿 JSON 路径")
     p.add_argument("--attachment-field", default=None,
                    help="附件字段名（默认取 config fields.contracts.attachment，再兜底「附件」）")

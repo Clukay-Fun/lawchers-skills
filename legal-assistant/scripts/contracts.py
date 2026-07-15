@@ -1,12 +1,12 @@
-"""B1 销项发票入账 + B0 合同登记。
+"""销项发票入账 + 合同登记。
 
-B1（自动 + 人工兜底）：
+销项发票入账（自动 + 人工兜底）：
   开票收件箱 PDF → 文本层提取发票字段 → 用付款方在合同台账唯一匹配合同号 →
-  写合同开票统计表 → 尽力回写合同台账（已开票/关联发票）→ PDF 归档。
+  写合同开票统计表 → 回写合同台账（已开票累加、关联发票经双向 link 自动反填）→ PDF 归档。
   任何不确定（字段缺失 / 无匹配 / 多匹配 / 远端重复）→ pending_review，禁止猜测写入。
   人工复核协议：`pending` 列出挂起项，`resolve --contract-no … [--member …]` 显式补全后写入。
 
-B0（对话式半自动）：
+合同登记（对话式半自动）：
   contract-draft <pdf> → 字段草稿 JSON（低置信度留空）→ agent/用户确认修改 →
   contract-commit --draft <json> → 写合同台账 + 上传附件。确认前不落任何业务数据。
 """
@@ -151,7 +151,7 @@ def parse_invoice_text(text: str, firm_name: str = "") -> ParsedInvoice:
     return parsed
 
 
-# ---------- B1 ----------
+# ---------- 销项发票入账 ----------
 
 def _lookup_contracts(lark: LarkClient, cfg: Config, client: str) -> List[dict]:
     """按客户名在合同台账中查合同。返回 [{"contract_no":…, "record_id":…}]。"""
@@ -368,7 +368,7 @@ def resolve_pending(
     return parsed.invoice_no
 
 
-# ---------- B0 ----------
+# ---------- 合同登记 ----------
 
 RE_USCC = re.compile(r"[0-9A-HJ-NP-RT-UW-Y]{18}")  # 统一社会信用代码
 RE_CONTRACT_AMOUNT = re.compile(r"(?:合同金额|律师费|代理费|服务费)[^\d¥￥]{0,20}[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)")
@@ -413,7 +413,7 @@ def contract_draft(cfg: Config, pdf: Path, journal: Journal) -> Path:
     return out
 
 
-# B0 草稿键（用户/agent 可读的中文）→ config fields.contracts 的内部键。
+# 合同登记草稿键（用户/agent 可读的中文）→ config fields.contracts 的内部键。
 # 写飞书前一律经 config 映射转换；表里字段改名只改 config。
 DRAFT_KEY_MAP = {
     "律所合同号": "contract_no",

@@ -78,7 +78,7 @@ class FakeLark:
 
 
 CONFIG_TEMPLATE = """
-firm_name: "北京市隆安（深圳）律师事务所"
+firm_name: "示例律师事务所"
 paths:
   invoice_inbox: "{root}/发票收件箱"
   invoice_output: "{root}/发票整理"
@@ -199,7 +199,7 @@ def make_invoice_zip(path: Path, rows, pdf_names=None, include_xlsx=True):
             ws.append(QQ_HEADER)
             total = 0.0
             for inv_type, inv_date, inv_no, payee, amount in rows:
-                ws.append(["", inv_type, inv_date, "北京市隆安（深圳）律师事务所", "TAX123",
+                ws.append(["", inv_type, inv_date, "示例律师事务所", "TAX123",
                            "", inv_no, "", payee, amount, 0, amount])
                 total += amount
             ws.append(["总计", "", "", "", "", "", "", "", "", "", "", total])

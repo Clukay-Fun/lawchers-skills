@@ -1,4 +1,4 @@
-"""Slice 4/5：B1 销项入账 + B0 合同登记。"""
+"""销项发票入账 + 合同登记。"""
 
 import json
 
@@ -20,9 +20,9 @@ SAMPLE_INVOICE_TEXT = """
 电子发票（普通发票）
 发票号码：26952000001234567890
 开票日期： 2026年07月10日
-购 买 方 名称：深圳市安居集团有限公司
-统一社会信用代码：91440300MA5XXXXX0X
-销 售 方 名称：北京市隆安（深圳）律师事务所
+购 买 方 名称：甲方科技有限公司
+统一社会信用代码：91440300MA0000000X
+销 售 方 名称：示例律师事务所
 价税合计（大写） 壹万捌仟伍佰伍拾圆整 （小写）¥18550.00
 """
 
@@ -47,10 +47,10 @@ REAL_LAYOUT_TEXT = """电子发票（普通发票）
 名称：
 26952000001234567890
 2026年07月10日
-深圳市安居集团有限公司
-91440300MA5DA8G12X
-北京市隆安（深圳）律师事务所
-31440000MD0217791L
+甲方科技有限公司
+91440300MA0000000X
+示例律师事务所
+31440000MB1111111Y
 项目名称
 *鉴证咨询服务*法律服务费
 价税合计（大写）
@@ -65,7 +65,7 @@ REAL_LAYOUT_TEXT = """电子发票（普通发票）
 """
 
 
-FIRM = "北京市隆安（深圳）律师事务所"
+FIRM = "示例律师事务所"
 
 
 def test_parse_inline_label_layout():
@@ -73,7 +73,7 @@ def test_parse_inline_label_layout():
     assert p.invoice_no == "26952000001234567890"
     assert p.invoice_date == "2026/07/10"
     assert p.amount == 18550.0
-    assert p.payer == "深圳市安居集团有限公司"
+    assert p.payer == "甲方科技有限公司"
     assert p.missing() == []
 
 
@@ -82,7 +82,7 @@ def test_parse_real_separated_layout():
     assert p.invoice_no == "26952000001234567890"
     assert p.invoice_date == "2026/07/10"
     assert p.amount == 18550.0  # 最大 ¥ 值 = 价税合计
-    assert p.payer == "深圳市安居集团有限公司"  # 排除本所后的对方
+    assert p.payer == "甲方科技有限公司"  # 排除本所后的对方
     assert p.missing() == []
 
 
@@ -105,11 +105,11 @@ def test_parse_real_pdf_via_fitz(tmp_path):
     assert p.invoice_no == "26952000001234567890"
     assert p.invoice_date == "2026/07/10"
     assert p.amount == 18550.0
-    assert p.payer == "深圳市安居集团有限公司"
+    assert p.payer == "甲方科技有限公司"
     assert p.missing() == []
 
 
-def _seed_contract(fake_lark, contract_no="20260001", client="深圳市安居集团有限公司"):
+def _seed_contract(fake_lark, contract_no="20260001", client="甲方科技有限公司"):
     return fake_lark.record_create("contracts", {
         "律所合同号": contract_no, "客户名称": client, "已开票": 0,
     })
