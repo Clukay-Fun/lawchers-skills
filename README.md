@@ -1,25 +1,17 @@
 # lawchers-skills
 
-面向 AI 编码代理（Claude Code / Codex 等）的工具与 Skill 集合。每个子目录是一个**自包含、可独立安装使用**的项目，核心能力沉淀在 CLI 里，Skill/README 只是让代理能稳定调用的外壳。
+法律工作技能集合。四个日常事务技能采用纯 skill，由模型理解请求并使用环境已有能力；材料脱敏保留本地处理引擎。
 
-## 子项目
+| 英文标识 | 中文名称 | 职责 |
+|---|---|---|
+| [legal-receipt](legal-receipt/SKILL.md) | 贴票统计 | 整理报销贴票材料，核对并登记贴票台账 |
+| [legal-invoice](legal-invoice/SKILL.md) | 合同发票统计 | 登记已开的合同发票，关联合同并核对已开票金额 |
+| [legal-contract](legal-contract/SKILL.md) | 合同登记 | 提取合同信息，核对并登记合同台账 |
+| [legal-organize](legal-organize/SKILL.md) | 日常工作文件整理 | 根据内容与既有习惯命名、分类和归档工作文件 |
+| [legal-mask](legal-mask/SKILL.md) | 材料脱敏 | 对材料脱敏、审核与还原；CLI 命令仍为 `legal-desens` |
 
-| 项目 | 作用 | 状态 |
-|------|------|------|
-| [`legal-desensitizer/`](legal-desensitizer/) | **通用案件材料脱敏 skill**（通用核心 + 场景 profile）：对 `.txt / .md / .csv / .docx / .xlsx` 做**可逆脱敏、映射、还原、审计**，图片/扫描件走不可逆 OCR；profile 控制脱/留（`labor` 默认已验证、`strict` 全脱）。可选接入[本地 CLUENER ONNX 模型](https://modelscope.cn/models/Clukay416/legal-desens-cluener-onnx)；PDF 支持为 opt-in extra | 可用（劳动场景首轮验收） |
-| [`legal-assistant/`](legal-assistant/) | **律所日常事务自动化 skill**（脚本为主、agent 辅助）：进项发票贴票入台账、销项发票入账（歧义挂起人工复核）、合同登记（草稿确认制）、扫描件七分类归档、周五汇总推送；数据中枢为飞书多维表格（经 lark-cli），Windows Task Scheduler 挂机 | v1 已交付（待 Windows 实机联调） |
+## 使用
 
-## 给 AI 代理的快速入口
+四个事务技能各自独立，读取对应 `SKILL.md` 即可。`agents/openai.yaml` 仅提供中文显示名，不包含程序或调度配置。具体台账、目录、命名和业务规则沿用用户上下文及实际样例；无需配置一整套自动化系统，不包含业务汇总。
 
-如果你是被发来这个仓库链接的代理，想直接安装并使用某个能力：
-
-1. 进入对应子目录，**先读它的 `README.md`**（安装/使用/安全约定都在那里）。
-2. 子目录里的 `SKILL.md` / `AGENTS.md` / `CLAUDE.md` 是给代理的调用规范与边界，使用前必读。
-3. 按 README 的"安装—自测—使用"三步走；自测（`pytest`）通过再处理真实文档。
-
-例如脱敏能力：
-
-```bash
-cd legal-desensitizer
-# 按该目录 README 安装、跑 pytest 自测、再 redact 真实文档
-```
+材料脱敏先读 [安装说明](legal-mask/README.md)，按需安装依赖并自测，再按 [SKILL.md](legal-mask/SKILL.md) 处理材料。skill 标识为 `legal-mask`，Python 包与命令保留 `legal_desens` / `legal-desens`。

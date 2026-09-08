@@ -1,0 +1,4 @@
+interface:
+  display_name: "合同发票统计"
+  short_description: "登记律所已开的合同发票，核对对应合同关系并维护开票记录"
+  default_prompt: "使用 $legal-invoice 按我的要求和现有工作习惯完成合同发票统计。"

@@ -1,0 +1,7 @@
+interface:
+  display_name: "材料脱敏"
+  short_description: "通用案件材料脱敏与审计"
+  default_prompt: "使用 $legal-mask 根据我的用途处理材料中的敏感信息，并提供脱敏文件与验证结果。"
+
+policy:
+  allow_implicit_invocation: true
