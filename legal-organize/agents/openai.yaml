@@ -2,3 +2,6 @@ interface:
   display_name: "日常工作文件整理"
   short_description: "根据文件内容与现有工作习惯，完成文件命名分类以及目录归档"
   default_prompt: "使用 $legal-organize 按我的要求和现有工作习惯完成日常工作文件整理。"
+
+policy:
+  allow_implicit_invocation: true

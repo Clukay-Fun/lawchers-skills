@@ -2,3 +2,6 @@ interface:
   display_name: "合同登记"
   short_description: "阅读合同并提取登记信息，核对已有记录后录入指定合同台账"
   default_prompt: "使用 $legal-contract 按我的要求和现有工作习惯完成合同登记。"
+
+policy:
+  allow_implicit_invocation: true
